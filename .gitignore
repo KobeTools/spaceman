@@ -4,6 +4,7 @@
 # Build artifacts
 localbuild/
 DerivedData/
+.derivedData/
 *.xcarchive
 *.dmg
 

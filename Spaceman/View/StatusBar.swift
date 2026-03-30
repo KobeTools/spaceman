@@ -45,7 +45,7 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         shortcutHelper = ShortcutHelper()
         spaceSwitcher = SpaceSwitcher()
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true, updaterDelegate: self, userDriverDelegate: self)
+            startingUpdater: false, updaterDelegate: self, userDriverDelegate: self)
 
         statusBarItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusBarMenu = NSMenu()
