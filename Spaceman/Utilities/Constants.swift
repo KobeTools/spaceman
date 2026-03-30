@@ -11,6 +11,8 @@ struct Constants {
     static let maxSpaceNameLength = 10
     static let minMenuWidth: CGFloat = 350
     static let inactiveAlpha: CGFloat = 0.4
+    static let filledBorderedFillAlpha: CGFloat = 0.3
+    static let filledBorderedInactiveAlpha: CGFloat = 0.7
 
     enum AppInfo {
         static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
