@@ -240,6 +240,15 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         }
     }
 
+    func isIconVisible() -> Bool {
+        guard let window = statusBarItem.button?.window else { return false }
+        return window.occlusionState.contains(.visible)
+    }
+
+    func statusBarWindow() -> NSWindow? {
+        return statusBarItem.button?.window
+    }
+
     func getButtonFrame() -> NSRect? {
         return statusBarItem.button?.frame
     }

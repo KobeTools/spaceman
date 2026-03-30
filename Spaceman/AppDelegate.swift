@@ -10,10 +10,20 @@ import KeyboardShortcuts
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
+    @AppStorage("autoShrink") private var autoShrink = false
+    @AppStorage("layoutMode") private var layoutMode = LayoutMode.medium
+
     private var iconCreator: IconCreator!
     private var statusBar: StatusBar!
     private var spaceObserver: SpaceObserver!
     private var currentSpaces: [Space] = []
+
+    // Auto-shrink state
+    private var effectiveLayoutMode: LayoutMode?
+    private var lastSpaces: [Space] = []
+    private var occlusionObserver: NSObjectProtocol?
+    private var shrinkDebounceWorkItem: DispatchWorkItem?
+    private var safetyTimer: Timer?
 
     static var activeSpaceIDs: Set<String> = []
 
@@ -44,6 +54,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             selector: #selector(openPreferencesFromScript),
             name: NSNotification.Name("OpenPreferences"),
             object: nil)
+
+        // Auto-shrink: set up occlusion observer after a short delay
+        // (the status bar window may not exist yet at launch)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.setupOcclusionObserver()
+            self.shrinkIfEvicted()
+            self.safetyTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+                self?.shrinkIfEvicted()
+            }
+        }
+
+        // Reset auto-shrink overrides when settings change
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("ButtonPressed"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            if self.effectiveLayoutMode != nil {
+                self.effectiveLayoutMode = nil
+                self.renderIcon(for: self.lastSpaces)
+            }
+        }
     }
 
     func applicationWillTerminate(_ aNotification: Notification) {
@@ -91,6 +124,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         return activeSpaces.first
+    }
+
+    // MARK: - Auto-shrink
+
+    private func renderIcon(for spaces: [Space]) {
+        let buttonAppearance = statusBar.getButtonAppearance()
+        let icon = iconCreator.getIcon(for: spaces, appearance: buttonAppearance,
+                                        layoutModeOverride: effectiveLayoutMode)
+        statusBar.updateStatusBar(withIcon: icon, withSpaces: spaces)
+
+        if occlusionObserver == nil {
+            setupOcclusionObserver()
+        }
+    }
+
+    private func setupOcclusionObserver() {
+        guard occlusionObserver == nil,
+              let window = statusBar.statusBarWindow() else { return }
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.shrinkIfEvicted()
+        }
+    }
+
+    private func shrinkIfEvicted() {
+        guard autoShrink, !statusBar.isIconVisible() else { return }
+
+        shrinkDebounceWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.performShrink()
+        }
+        shrinkDebounceWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: workItem)
+    }
+
+    private func performShrink() {
+        guard autoShrink, !statusBar.isIconVisible() else { return }
+
+        let currentLayout = effectiveLayoutMode ?? layoutMode
+
+        if currentLayout == .dualRows {
+            effectiveLayoutMode = .narrow
+        } else if let smaller = currentLayout.smaller {
+            effectiveLayoutMode = smaller
+        } else {
+            return // already at smallest
+        }
+
+        renderIcon(for: lastSpaces)
     }
 
     // MARK: - Legacy Settings Migration
@@ -172,9 +257,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: SpaceObserverDelegate {
     func didUpdateSpaces(spaces: [Space]) {
         currentSpaces = spaces
-        let buttonAppearance = statusBar.getButtonAppearance()
-        let icon = iconCreator.getIcon(for: spaces, appearance: buttonAppearance)
-        statusBar.updateStatusBar(withIcon: icon, withSpaces: spaces)
+        lastSpaces = spaces
+
+        // Reset auto-shrink override on each space update
+        effectiveLayoutMode = nil
+        renderIcon(for: spaces)
 
         AppDelegate.activeSpaceIDs = Set(spaces.map { $0.spaceID })
         NotificationCenter.default.post(name: NSNotification.Name("ActiveSpacesChanged"), object: nil)

@@ -19,6 +19,7 @@ struct PreferencesView: View {
     @AppStorage("decorationInactive") private var decorationInactive = IconStyle.borderedRounded
     @AppStorage("useVariableWidth") private var useVariableWidth = false
     @AppStorage("autoRefreshSpaces") private var autoRefreshSpaces = false
+    @AppStorage("autoShrink") private var autoShrink = false
     @AppStorage("layoutMode") private var layoutMode = LayoutMode.medium
     @AppStorage("visibleSpacesMode") private var visibleSpacesModeRaw: Int = VisibleSpacesMode.all.rawValue
     @AppStorage("neighborRadius") private var neighborRadius = 1
@@ -345,6 +346,7 @@ struct PreferencesView: View {
                 .fontWeight(.semibold)
             layoutSizePicker
             dualRowFillOrderPicker
+            Toggle("Auto-shrink when there is shortage of space", isOn: $autoShrink)
             spacesStylePicker
             activeIconStylePicker
             inactiveIconStylePicker
@@ -364,6 +366,9 @@ struct PreferencesView: View {
         }
         .padding()
         .onChange(of: dualRowFillOrder) { _ in
+            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+        }
+        .onChange(of: autoShrink) { _ in
             NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
         }
         .onChange(of: visibleSpacesModeRaw) { _ in

@@ -34,8 +34,10 @@ class IconCreator {
     public var sizes: GuiSize!
     public var iconWidths: [IconWidth] = []
 
-    public func getIcon(for spaces: [Space], appearance: NSAppearance? = nil) -> NSImage {
-        sizes = Constants.sizes[layoutMode]
+    public func getIcon(for spaces: [Space], appearance: NSAppearance? = nil,
+                        layoutModeOverride: LayoutMode? = nil) -> NSImage {
+        let effectiveLayout = layoutModeOverride ?? layoutMode
+        sizes = Constants.sizes[effectiveLayout]
 
         let allNoDecoration = decorationActive.isNoDecoration && decorationInactive.isNoDecoration
         let actualFontSize = CGFloat(sizes.FONT_SIZE) + (allNoDecoration ? 2 : 0)
@@ -78,7 +80,7 @@ class IconCreator {
         }
 
         let iconsWithDisplayProperties = getIconsWithDisplayProps(icons: icons, spaces: filteredSpaces)
-        if layoutMode == .dualRows {
+        if effectiveLayout == .dualRows {
             return mergeIconsTwoRows(iconsWithDisplayProperties, indexMap: switchIndexBySpaceID)
         } else {
             return mergeIcons(iconsWithDisplayProperties, indexMap: switchIndexBySpaceID)
