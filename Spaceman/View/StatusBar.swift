@@ -919,9 +919,8 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         let hostedPrefsView = NSHostingView(
             rootView: PreferencesView(
                 tabState: prefsWindow.tabState,
-                onCheckForUpdates: { [weak self] in
-                    self?.updaterController.checkForUpdates(nil)
-                }))
+                // Fork builds from source: no update button (Sparkle is never started).
+                onCheckForUpdates: nil))
         hostedPrefsView.sizingOptions = [.intrinsicContentSize]
         prefsWindow.contentView = hostedPrefsView
 

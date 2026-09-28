@@ -230,12 +230,14 @@ struct PreferencesView: View {
                 }
                 .font(.subheadline)
                 .foregroundColor(.secondary)
-                Button {
-                    onCheckForUpdates?()
-                } label: {
-                    Text("Check for Updates…")
+                if let onCheckForUpdates {
+                    Button {
+                        onCheckForUpdates()
+                    } label: {
+                        Text("Check for Updates…")
+                    }
+                    .padding(.top, 4)
                 }
-                .padding(.top, 4)
                 HStack(spacing: 4) {
                     Button {
                         NSWorkspace.shared.open(
