@@ -313,11 +313,16 @@ class SpaceObserver {
                     strategy: strategy,
                     connectedDisplayIDs: strategy != .idOnly ? connectedDisplayIDs : nil)
                 let savedName = savedInfo?.spaceName
-                let resolvedName = resolveSpaceName(
-                    from: savedName,
-                    spaceLabel: spaceLabel,
-                    isFullScreen: isFullScreen,
-                    spaceDict: spaceDict)
+                let fullscreenApp = isFullScreen ? fullscreenAppName(spaceDict) : nil
+                let isAutoFullscreenName = isFullScreen
+                    && FullscreenNaming.isAutoName(savedName, appName: fullscreenApp)
+                let resolvedName = isAutoFullscreenName
+                    ? FullscreenNaming.current.displayName(forApp: fullscreenApp)
+                    : resolveSpaceName(
+                        from: savedName,
+                        spaceLabel: spaceLabel,
+                        isFullScreen: isFullScreen,
+                        spaceDict: spaceDict)
 
                 let space = Space(
                     displayID: displayID,
@@ -339,7 +344,10 @@ class SpaceObserver {
 
                 var nameInfo = SpaceNameInfo(
                     spaceNum: spaceNumber,
-                    spaceName: resolvedName,
+                    // Auto fullscreen names aren't saved, so they keep following
+                    // the "Fullscreen space names" setting instead of looking
+                    // like a user rename next time.
+                    spaceName: isAutoFullscreenName ? "" : resolvedName,
                     spaceLabel: spaceLabel)
 
                 // During topology changes, if we found the entry by ID matching,
@@ -516,6 +524,79 @@ class SpaceObserver {
         }
         return ""
     }
+}
+
+extension SpaceObserver {
+    fileprivate func fullscreenAppName(_ spaceDict: [String: Any]) -> String? {
+        guard let pid = spaceDict["pid"] as? pid_t else { return nil }
+        return NSRunningApplication(processIdentifier: pid)?.localizedName
+    }
+}
+
+// MARK: - Fullscreen space names (fork)
+
+/// How fullscreen spaces are labelled when the user hasn't renamed them.
+enum FullscreenNaming: Int, CaseIterable {
+    case appName = 0    // "Microsoft Edge Beta" (upstream behavior)
+    case short = 1      // "Edge"
+    case none = 2       // no name, just the number / label
+
+    static var current: FullscreenNaming {
+        FullscreenNaming(rawValue: UserDefaults.standard.integer(forKey: "fullscreenNaming")) ?? .appName
+    }
+
+    var pickerLabel: String {
+        switch self {
+        case .appName: return String(localized: "App name")
+        case .short:   return String(localized: "Short")
+        case .none:    return String(localized: "None")
+        }
+    }
+
+    func displayName(forApp appName: String?) -> String {
+        switch self {
+        case .appName: return appName?.capitalized ?? "FULL"
+        case .short:   return appName.map(Self.shortName) ?? "FULL"
+        case .none:    return ""
+        }
+    }
+
+    /// "Microsoft Edge Beta" -> "Edge", "Google Chrome" -> "Chrome": drop a vendor
+    /// prefix and release-channel suffix, and keep one word if still long.
+    static func shortName(_ appName: String) -> String {
+        let vendors: Set = ["microsoft", "google", "apple", "mozilla", "adobe", "jetbrains"]
+        let channels: Set = ["beta", "dev", "canary", "nightly", "preview", "insiders"]
+        var words = appName.split(separator: " ").map(String.init)
+        if words.count > 1, vendors.contains(words[0].lowercased()) { words.removeFirst() }
+        while words.count > 1, let last = words.last, channels.contains(last.lowercased()) { words.removeLast() }
+        let joined = words.joined(separator: " ")
+        return joined.count <= 10 ? joined : (words.first ?? joined)
+    }
+
+    /// A saved fullscreen name is automatic (not a user rename) when it's empty
+    /// or is an app's own name in any case. Older versions saved the app name,
+    /// uppercased, for every fullscreen space, including on displays that are
+    /// no longer connected, so installed app names count too.
+    static func isAutoName(_ saved: String?, appName: String?) -> Bool {
+        guard let saved, !saved.isEmpty else { return true }
+        let key = saved.lowercased()
+        if let appName, key == appName.lowercased() || key == shortName(appName).lowercased() { return true }
+        return installedAppNames.contains(key)
+    }
+
+    private static let installedAppNames: Set<String> = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dirs = ["/Applications", "/Applications/Utilities", "/System/Applications",
+                    "/System/Applications/Utilities", home + "/Applications"]
+        var names = Set<String>()
+        for dir in dirs {
+            for entry in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+            where entry.hasSuffix(".app") {
+                names.insert(String(entry.dropLast(4)).lowercased())
+            }
+        }
+        return names
+    }()
 }
 
 protocol SpaceObserverDelegate: AnyObject {

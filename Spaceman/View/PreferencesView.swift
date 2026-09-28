@@ -32,6 +32,7 @@ struct PreferencesView: View {
     @AppStorage("visibleSpacesMode") private var visibleSpacesMode = VisibleSpacesMode.all
     @AppStorage("neighborRadius") private var neighborRadius = 1
     @AppStorage("showFullscreenSpaces") private var showFullscreenSpaces = true
+    @AppStorage("fullscreenNaming") private var fullscreenNaming = FullscreenNaming.appName
     @AppStorage("restartNumberingByDisplay") private var restartNumberingByDisplay = false
     @AppStorage("horizontalDirection") private var horizontalDirection = HorizontalDirection.defaultOrder
     @AppStorage("verticalDirection") private var verticalDirection = VerticalDirection.bottomGoesFirst
@@ -386,6 +387,8 @@ struct PreferencesView: View {
                 .padding(.vertical, 2)
             Toggle("Show fullscreen spaces", isOn: $showFullscreenSpaces)
                 .padding(.bottom, 2)
+            fullscreenNamingPicker
+                .disabled(!showFullscreenSpaces)
             Toggle("Show Mission Control button", isOn: $showMissionControl)
                 .padding(.bottom, 2)
             Toggle("Show navigation arrows", isOn: $showNavArrows)
@@ -420,6 +423,9 @@ struct PreferencesView: View {
             postSettingsChanged()
         }
         .onChange(of: showFullscreenSpaces) { _ in
+            postSettingsChanged()
+        }
+        .onChange(of: fullscreenNaming) { _ in
             postSettingsChanged()
         }
         .onChange(of: showMissionControl) { _ in
@@ -783,6 +789,31 @@ struct PreferencesView: View {
     }
 
     // MARK: - Spaces shown picker
+    /// Fork: label for fullscreen spaces that weren't renamed (renamed ones keep their name).
+    private var fullscreenNamingPicker: some View {
+        HStack(spacing: 12) {
+            Text("Fullscreen space names")
+                .fixedSize()
+                .layoutPriority(1)
+            Spacer()
+            HStack(spacing: 1) {
+                ForEach(FullscreenNaming.allCases, id: \.self) { mode in
+                    let isSelected = fullscreenNaming == mode
+                    Button(mode.pickerLabel) {
+                        fullscreenNaming = mode
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(isSelected ? Color.accentColor : Color.gray.opacity(0.2))
+                    .foregroundColor(isSelected ? .white : .primary)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .padding(.bottom, 2)
+    }
+
     private var spacesShownPicker: some View {
         return VStack(alignment: .leading) {
             HStack(spacing: 12) {
