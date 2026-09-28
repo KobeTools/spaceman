@@ -166,7 +166,7 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         statusBarMenu.addItem(refreshItem)
         statusBarMenu.addItem(prefItem)
         statusBarMenu.addItem(NSMenuItem.separator())
-        statusBarMenu.addItem(updatesItem)
+        // Fork builds from source: no "Check for updates" (Sparkle is never started).
         statusBarMenu.addItem(quitItem)
         // statusBarItem.menu = statusBarMenu
 
