@@ -2,7 +2,7 @@
 //  DisplayGeometryUtilities.swift
 //  Spaceman
 //
-//  Created by René Uittenbogaard on 08/10/2025.
+//  Created by René Uittenbogaard on 2025-10-08.
 //
 
 import Cocoa
@@ -41,18 +41,14 @@ class DisplayGeometryUtilities {
         return CGDisplayBounds(did).size.height
     }
 
-    static func getIsVerticallyArranged(d1: NSDictionary, d2: NSDictionary) -> Bool {
+    static func getIsVerticallyArranged(display1: NSDictionary, display2: NSDictionary) -> Bool {
         // Displays are vertically stacked if deltaY is within margin from average height
-        let c1 = DisplayGeometryUtilities.getDisplayCenter(display: d1)
-        let c2 = DisplayGeometryUtilities.getDisplayCenter(display: d2)
-        let height1 = getDisplayHeight(display: d1)
-        let height2 = getDisplayHeight(display: d2)
+        let center1 = DisplayGeometryUtilities.getDisplayCenter(display: display1)
+        let center2 = DisplayGeometryUtilities.getDisplayCenter(display: display2)
+        let height1 = getDisplayHeight(display: display1)
+        let height2 = getDisplayHeight(display: display2)
         let averageHeight = (height1 + height2) / 2
-        let deltaY = abs(c1.y - c2.y)
+        let deltaY = abs(center1.y - center2.y)
         return abs(deltaY - averageHeight) < verticalStackMargin
-    }
-
-    static func getIsHorizontallyArranged(d1: NSDictionary, d2: NSDictionary) -> Bool {
-        return !getIsVerticallyArranged(d1: d1, d2: d2)
     }
 }

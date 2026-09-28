@@ -2,7 +2,8 @@
 //  SpaceFilter.swift
 //  Spaceman
 //
-//  Created by Claude Code 13/10/2025
+//  Created by René Uittenbogaard on 2025-10-13.
+//  Co-author: Claude Code
 //  Extracted from IconCreator for better testability
 //
 
@@ -16,23 +17,13 @@ struct SpaceFilter {
     ///   - spaces: All available spaces
     ///   - mode: The visibility mode (all, neighbors, currentOnly)
     ///   - neighborRadius: Number of spaces to show on each side of current space (for neighbors mode)
-    ///   - hideInactiveSpaces: Legacy flag for backward compatibility
     /// - Returns: Filtered array of spaces to display
     func filter(
         _ spaces: [Space],
         mode: VisibleSpacesMode,
-        neighborRadius: Int,
-        hideInactiveSpaces: Bool = false
+        neighborRadius: Int
     ) -> [Space] {
-        // Backwards compatibility: if legacy flag is true and visible mode wasn't set explicitly,
-        // treat as current only
-        let effectiveMode: VisibleSpacesMode = {
-            // Note: This logic is handled by IconCreator checking UserDefaults
-            // We pass the effective mode here
-            return mode
-        }()
-
-        switch effectiveMode {
+        switch mode {
         case .all:
             return spaces
 
@@ -45,7 +36,7 @@ struct SpaceFilter {
             var currentDisplayID = spaces.first?.displayID ?? ""
 
             func flushGroup() {
-                guard group.count > 0 else { return }
+                guard !group.isEmpty else { return }
                 if let activeIndex = group.firstIndex(where: { $0.isCurrentSpace }) {
                     let radius = max(0, neighborRadius)
                     let start = max(0, activeIndex - radius)
@@ -55,12 +46,12 @@ struct SpaceFilter {
                 group.removeAll(keepingCapacity: true)
             }
 
-            for s in spaces {
-                if s.displayID != currentDisplayID {
+            for space in spaces {
+                if space.displayID != currentDisplayID {
                     flushGroup()
-                    currentDisplayID = s.displayID
+                    currentDisplayID = space.displayID
                 }
-                group.append(s)
+                group.append(space)
             }
             flushGroup()
 

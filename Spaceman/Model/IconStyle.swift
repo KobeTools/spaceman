@@ -2,7 +2,8 @@
 //  IconStyle.swift
 //  Spaceman
 //
-//  Created by Claude Code on 27/03/2026.
+//  Created by René Uittenbogaard on 2026-03-27.
+//  Co-author: Claude Code
 //
 
 import AppKit
@@ -57,6 +58,49 @@ enum IconStyle: Int, CaseIterable {
         case .filledRectangular:    return .filledPill
         case .filledRounded:        return .filledRectangular
         case .filledPill:           return .filledRectangular
+        }
+    }
+
+    var shape: IconShape {
+        switch self {
+        case .noDecoration:                                     return .noDecoration
+        case .borderedRectangular, .filledRectangular:          return .rectangular
+        case .borderedRounded, .filledRounded:                  return .rounded
+        case .borderedPill, .filledPill:                        return .pill
+        }
+    }
+
+    var fill: IconFill {
+        return isFilled ? .filled : .bordered
+    }
+
+    /// Returns a new style with the given fill, preserving the shape.
+    /// If the current style is `noDecoration`, defaults to rectangular.
+    func withFill(_ fill: IconFill) -> IconStyle {
+        let resolvedShape = isNoDecoration ? IconShape.rectangular : shape
+        switch (fill, resolvedShape) {
+        case (_, .noDecoration):        return .noDecoration
+        case (.bordered, .rectangular): return .borderedRectangular
+        case (.bordered, .rounded):     return .borderedRounded
+        case (.bordered, .pill):        return .borderedPill
+        case (.filled, .rectangular):   return .filledRectangular
+        case (.filled, .rounded):       return .filledRounded
+        case (.filled, .pill):          return .filledPill
+        }
+    }
+
+    /// Returns a new style with the given shape, preserving the fill/border style.
+    /// If the current style is `noDecoration`, defaults to bordered.
+    func withShape(_ shape: IconShape) -> IconStyle {
+        switch shape {
+        case .noDecoration:
+            return .noDecoration
+        case .rectangular:
+            return isFilled ? .filledRectangular : .borderedRectangular
+        case .rounded:
+            return isFilled ? .filledRounded : .borderedRounded
+        case .pill:
+            return isFilled ? .filledPill : .borderedPill
         }
     }
 

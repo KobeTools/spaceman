@@ -3,25 +3,24 @@
     <channel>
         <title>Spaceman</title>
         <item>
-            <title>v1.15.8: Added icon size "enormous"</title>
+            <title>v1.26.2: added tooltips for spaces</title>
             <description>
                 <![CDATA[
-                    <p>v1.15.8:</p>
+                    <p>v1.26.2</p>
                     <ul>
-                        <li> - Added extra icon size "enormous"</li>
-                        <li> - Minor source code cleanup</li>
+                        <li>Show tooltip with space name when hovering</li>
                     </ul>
                 ]]>
             </description>
-            <pubDate>Mon, 30 Mar 2026 08:52:44 +0200</pubDate>
+            <pubDate>Thu, 24 Sep 2026 18:38:48 +0200</pubDate>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure
-                url="https://github.com/ruittenb/Spaceman/releases/download/v1.15.8/Spaceman-1.15.8.dmg"
-                sparkle:version="1.15.8"
-                sparkle:shortVersionString="1.15.8"
+                url="https://github.com/ruittenb/Spaceman/releases/download/v1.26.2/Spaceman-1.26.2.dmg"
+                sparkle:version="1.26.2"
+                sparkle:shortVersionString="1.26.2"
                 type="application/octet-stream"
-                length="3026455"
-sparkle:edSignature="tnt8ADtMGluz8UCY8hMIwHuUBDDdKA4/xT6pG2cYZPxAZ3P9rV5GXCIVwBQHnT0klTo6FkZPXW2+007KaoN+CQ=="
+                length="3570701"
+sparkle:edSignature="eXH106o8nNZ+drafWJI/XicpRzVBKvhIStANYyX0ywDrf6Cypspd3j8J2F3eG35xwwY0AsdJ0nwCOfW2ocfXCQ=="
             />
         </item>
     </channel>

@@ -8,16 +8,15 @@
 import Foundation
 
 struct Constants {
-    static let maxSpaceNameLength = 10
+    static let maxSpaceNameLength = 16
     static let minMenuWidth: CGFloat = 350
     static let inactiveAlpha: CGFloat = 0.4
 
     enum AppInfo {
         static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        // swiftlint:disable:next force_unwrapping
         static let repo = URL(string: "https://github.com/ruittenb/Spaceman")!
         // swiftlint:disable:next force_unwrapping
-        static let website = URL(string: "https://ruittenb.github.io/Spaceman/?20260324")!
+        static let website = URL(string: "https://ruittenb.github.io/Spaceman/?" + compilationDate())!
     }
 
     //  23   = 277 px ; button distance
@@ -27,69 +26,129 @@ struct Constants {
     //   2.5 =  30 px ; semi gap
     //   7.5 =  90 px ; void left
 
-    static let sizes: [LayoutMode: GuiSize] = [
-        .dualRows: GuiSize(
-            GAP_WIDTH_SPACES: 3,
-            GAP_WIDTH_DISPLAYS: 8,
-            GAP_HEIGHT_DUALROWS: 3,
-            HORIZONTAL_PADDING: 6,
-            VERTICAL_PADDING: 1.5,
-            BORDER_WIDTH: 1,
-            FONT_SIZE: 9
-        ),
+    static let sizes: [IconSize: GuiSize] = [
         .narrow: GuiSize(
-            GAP_WIDTH_SPACES: 2,
-            GAP_WIDTH_DISPLAYS: 8,
-            GAP_HEIGHT_DUALROWS: 0,
-            HORIZONTAL_PADDING: 3,
-            VERTICAL_PADDING: 3,
-            BORDER_WIDTH: 1,
-            FONT_SIZE: 10
+            gapWidthSpaces: 2,
+            gapWidthDisplays: 8,
+            gapHeightRows: 0,
+            horizontalPadding: 3,
+            verticalPadding: 3,
+            borderWidth: 1,
+            fontSize: 10
         ),
         .compact: GuiSize(
-            GAP_WIDTH_SPACES: 3,
-            GAP_WIDTH_DISPLAYS: 10,
-            GAP_HEIGHT_DUALROWS: 0,
-            HORIZONTAL_PADDING: 4,
-            VERTICAL_PADDING: 3,
-            BORDER_WIDTH: 1,
-            FONT_SIZE: 10
+            gapWidthSpaces: 3,
+            gapWidthDisplays: 10,
+            gapHeightRows: 0,
+            horizontalPadding: 4,
+            verticalPadding: 3,
+            borderWidth: 1,
+            fontSize: 10
         ),
         .medium: GuiSize(
-            GAP_WIDTH_SPACES: 4,
-            GAP_WIDTH_DISPLAYS: 12,
-            GAP_HEIGHT_DUALROWS: 0,
-            HORIZONTAL_PADDING: 5,
-            VERTICAL_PADDING: 3,
-            BORDER_WIDTH: 1.17,
-            FONT_SIZE: 10
+            gapWidthSpaces: 4,
+            gapWidthDisplays: 12,
+            gapHeightRows: 0,
+            horizontalPadding: 5,
+            verticalPadding: 3,
+            borderWidth: 1.17,
+            fontSize: 10
         ),
         .large: GuiSize(
-            GAP_WIDTH_SPACES: 5,
-            GAP_WIDTH_DISPLAYS: 14,
-            GAP_HEIGHT_DUALROWS: 0,
-            HORIZONTAL_PADDING: 6,
-            VERTICAL_PADDING: 3.75,
-            BORDER_WIDTH: 1.33,
-            FONT_SIZE: 12
+            gapWidthSpaces: 5,
+            gapWidthDisplays: 14,
+            gapHeightRows: 0,
+            horizontalPadding: 6,
+            verticalPadding: 3.6,
+            borderWidth: 1.33,
+            fontSize: 12
         ),
         .extraLarge: GuiSize(
-            GAP_WIDTH_SPACES: 6,
-            GAP_WIDTH_DISPLAYS: 16,
-            GAP_HEIGHT_DUALROWS: 0,
-            HORIZONTAL_PADDING: 7,
-            VERTICAL_PADDING: 4.5,
-            BORDER_WIDTH: 1.67,
-            FONT_SIZE: 14
+            gapWidthSpaces: 6,
+            gapWidthDisplays: 16,
+            gapHeightRows: 0,
+            horizontalPadding: 7,
+            verticalPadding: 4.5,
+            borderWidth: 1.67,
+            fontSize: 14
         ),
         .enormous: GuiSize(
-            GAP_WIDTH_SPACES: 6,
-            GAP_WIDTH_DISPLAYS: 16,
-            GAP_HEIGHT_DUALROWS: 0,
-            HORIZONTAL_PADDING: 8,
-            VERTICAL_PADDING: 5.25,
-            BORDER_WIDTH: 2,
-            FONT_SIZE: 16
+            gapWidthSpaces: 6,
+            gapWidthDisplays: 16,
+            gapHeightRows: 0,
+            horizontalPadding: 8,
+            verticalPadding: 5.25,
+            borderWidth: 2,
+            fontSize: 16
         )
     ]
+
+    static let sizesTwoRows: [IconSize: GuiSize] = [
+        .compact: GuiSize(
+            gapWidthSpaces: 1,
+            gapWidthDisplays: 6,
+            gapHeightRows: 1,
+            horizontalPadding: 2,
+            verticalPadding: 2,
+            borderWidth: 1,
+            fontSize: 9
+        ),
+        .medium: GuiSize(
+            gapWidthSpaces: 2,
+            gapWidthDisplays: 8,
+            gapHeightRows: 2,
+            horizontalPadding: 2.5,
+            verticalPadding: 1.75,
+            borderWidth: 1,
+            fontSize: 9
+        ),
+        .large: GuiSize(
+            gapWidthSpaces: 3,
+            gapWidthDisplays: 10,
+            gapHeightRows: 2,
+            horizontalPadding: 3,
+            verticalPadding: 1.5,
+            borderWidth: 1,
+            fontSize: 10
+        ),
+        // The two sizes below only fit the taller menu bar of notched
+        // MacBooks (34pt on a 16" at the default scaled resolution).
+        // On a 22pt bar the vertical-padding reduction in
+        // IconCreator.getIcon() shrinks them until they fit.
+        .extraLarge: GuiSize(
+            gapWidthSpaces: 3,
+            gapWidthDisplays: 10,
+            gapHeightRows: 2,
+            horizontalPadding: 3.5,
+            verticalPadding: 2,
+            borderWidth: 1,
+            fontSize: 12
+        ),
+        .enormous: GuiSize(
+            gapWidthSpaces: 4,
+            gapWidthDisplays: 12,
+            gapHeightRows: 2,
+            horizontalPadding: 4,
+            verticalPadding: 1.5,
+            borderWidth: 1,
+            fontSize: 13
+        )
+    ]
+
+    /// Returns the nearest IconSize that has a two-row entry.
+    static func nearestTwoRowIconSize(for size: IconSize) -> IconSize {
+        if sizesTwoRows[size] != nil { return size }
+        switch size {
+        case .narrow, .compact:              return .compact
+        case .medium:                        return .medium
+        case .large, .extraLarge, .enormous: return .large
+        }
+    }
+
+    /// Returns the two-row GuiSize for the given size, mapping to the
+    /// nearest available size if the size has no two-row entry.
+    static func nearestTwoRowSize(for size: IconSize) -> GuiSize {
+        // swiftlint:disable:next force_unwrapping
+        return sizesTwoRows[nearestTwoRowIconSize(for: size)]!
+    }
 }

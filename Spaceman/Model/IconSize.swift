@@ -1,0 +1,49 @@
+//
+//  IconSize.swift
+//  Spaceman
+//
+//  Created by René Uittenbogaard on 2024-09-27.
+//
+
+import Foundation
+
+enum IconSize: Int, CaseIterable {
+    case narrow = 0
+    case compact = 1
+    case medium = 2
+    case large = 3
+    case extraLarge = 4
+    case enormous = 5
+
+    /// The next larger size, or nil if already at the largest.
+    var larger: IconSize? {
+        IconSize(rawValue: rawValue + 1)
+    }
+
+    /// The next smaller size, or nil if already at the smallest.
+    var smaller: IconSize? {
+        IconSize(rawValue: rawValue - 1)
+    }
+
+    /// The next smaller size that actually changes the rendered icon. In
+    /// two-row mode, sizes without their own two-row entry are skipped.
+    func nextSmaller(twoRows: Bool) -> IconSize? {
+        var candidate = smaller
+        while let size = candidate {
+            if !twoRows || Constants.sizesTwoRows[size] != nil { return size }
+            candidate = size.smaller
+        }
+        return nil
+    }
+
+    var menuLabel: String {
+        switch self {
+        case .narrow:     return String(localized: "Narrow")
+        case .compact:    return String(localized: "Compact")
+        case .medium:     return String(localized: "Medium")
+        case .large:      return String(localized: "Large")
+        case .extraLarge: return String(localized: "Extra Large")
+        case .enormous:   return String(localized: "Enormous")
+        }
+    }
+}

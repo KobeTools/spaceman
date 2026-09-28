@@ -6,44 +6,61 @@
 //
 
 import Foundation
+import os.log
 import Sparkle
 import SwiftUI
 
 class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
-    @AppStorage("visibleSpacesMode") private var visibleSpacesModeRaw: Int = VisibleSpacesMode.all.rawValue
-    @AppStorage("displayStyle") private var displayStyle = IconText.numbers
-    @AppStorage("layoutMode") private var layoutMode = LayoutMode.medium
-    @AppStorage("dualRowFillOrder") private var dualRowFillOrder = DualRowFillOrder.byColumn
-    @AppStorage("schema") private var keySet = KeySet.toprow
-    @AppStorage("hideFullscreenSpaces") private var hideFullscreenSpaces = false
+    @AppStorage("visibleSpacesMode") private var visibleSpacesMode = VisibleSpacesMode.all
+    @AppStorage("iconText") private var iconText = IconText.numbers
+    @AppStorage("iconSize") private var iconSize = IconSize.medium
+    @AppStorage("rowLayout") private var rowLayout = RowLayout.singleRow
+    @AppStorage("decorationActive") private var decorationActive = IconStyle.filledRounded
+    @AppStorage("decorationInactive") private var decorationInactive = IconStyle.borderedRounded
+    @AppStorage("lastActiveShape") private var lastActiveShape = IconShape.rounded
+    @AppStorage("lastActiveFill") private var lastActiveFill = IconFill.filled
+    @AppStorage("lastInactiveShape") private var lastInactiveShape = IconShape.rounded
+    @AppStorage("lastInactiveFill") private var lastInactiveFill = IconFill.bordered
+    @AppStorage("showFullscreenSpaces") private var showFullscreenSpaces = true
+    @AppStorage("mainDisplayOnly") private var mainDisplayOnly = false
     @AppStorage("useVariableWidth") private var useVariableWidth = false
+    @AppStorage("fontDesign") private var fontDesign = FontDesign.monospaced
+    @AppStorage("showMissionControl") private var showMissionControl = false
+    @AppStorage("showNavArrows") private var showNavArrows = false
+    @AppStorage("switchingMode") private var switchingMode = SwitchingMode.smooth.rawValue
+    @AppStorage("spaceDisplayMode") private var spaceDisplayMode = SpaceDisplayMode.list
 
-    private var visibleSpacesMode: VisibleSpacesMode {
-        get { VisibleSpacesMode(rawValue: visibleSpacesModeRaw) ?? .all }
-        set { visibleSpacesModeRaw = newValue.rawValue }
-    }
     private var statusBarItem: NSStatusItem!
     private var statusBarMenu: NSMenu!
     private var updatesItem: NSMenuItem!
     private var refreshItem: NSMenuItem!
+    private var quickRenameItem: NSMenuItem!
     private var prefItem: NSMenuItem!
     private var quitItem: NSMenuItem!
-    private var layoutMenuItem: NSMenuItem!
+    private var rowLayoutMenuItem: NSMenuItem!
+    private var iconSizeMenuItem: NSMenuItem!
+    private var iconTextMenuItem: NSMenuItem!
     private var iconStyleMenuItem: NSMenuItem!
     private var spacesShownMenuItem: NSMenuItem!
     private var prefsWindow: PreferencesWindow!
-    private var spaceSwitcher: SpaceSwitcher!
-    private var shortcutHelper: ShortcutHelper!
+    private var tabChangeObserver: NSObjectProtocol?
+    private var scrollAccumulator: CGFloat = 0
+    private var lastScrollTime: Date = .distantPast
+    private var spaceSwitcher: SwitchOrchestrator!
+    private var currentSpaces: [Space] = []
     private var updaterController: SPUStandardUpdaterController!
     private var aboutView: NSHostingView<AboutView>!
+    private var missingShortcutBalloon: NSPopover?
+    private var quickRenamePanel: NSPanel?
+    private static let clickLog = Logger(
+        subsystem: "dev.ruittenb.Spaceman", category: "click")
 
     public var iconCreator: IconCreator!
 
     override init() {
         super.init()
 
-        shortcutHelper = ShortcutHelper()
-        spaceSwitcher = SpaceSwitcher()
+        spaceSwitcher = SwitchOrchestrator()
         updaterController = SPUStandardUpdaterController(
             startingUpdater: false, updaterDelegate: self, userDriverDelegate: self)
 
@@ -61,11 +78,11 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         about.view = aboutView
 
         updatesItem = NSMenuItem(
-            title: String(localized: "Check for updates..."),
+            title: String(localized: "Check for Updates…"),
             action: #selector(updaterController.checkForUpdates(_:)),
             keyEquivalent: "")
         updatesItem.target = updaterController
-        updatesItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
+        updatesItem.image = NSImage(systemSymbolName: "arrow.clockwise.icloud", accessibilityDescription: nil)
 
         // Set up update badge - start with no badge, show only when update available
         if #available(macOS 14.0, *) {
@@ -76,15 +93,27 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
             title: String(localized: "Refresh"),
             action: #selector(refreshSpaces(_:)),
             keyEquivalent: "")
+        refreshItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
         refreshItem.target = self
         Task { @MainActor in
             refreshItem.setShortcut(for: .refresh)
         }
 
+        quickRenameItem = NSMenuItem(
+            title: String(localized: "Rename Current Space…"),
+            action: #selector(quickRenameCurrentSpace(_:)),
+            keyEquivalent: "")
+        quickRenameItem.image = NSImage(systemSymbolName: "tag", accessibilityDescription: nil)
+        quickRenameItem.target = self
+        Task { @MainActor in
+            quickRenameItem.setShortcut(for: .quickRename)
+        }
+
         prefItem = NSMenuItem(
-            title: String(localized: "Preferences..."),
+            title: String(localized: "Preferences…"),
             action: #selector(showPreferencesWindow(_:)),
             keyEquivalent: "")
+        prefItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         prefItem.target = self
         Task { @MainActor in
             prefItem.setShortcut(for: .preferences)
@@ -97,71 +126,38 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         quitItem.image = NSImage(systemSymbolName: "xmark.rectangle", accessibilityDescription: nil)
 
         // Build settings submenus
-        let layoutSubmenu = NSMenu()
-        for mode in LayoutMode.allCases {
-            if mode == .dualRows {
-                let byRow = NSMenuItem(
-                    title: String(localized: "Dual Row, rows first"),
-                    action: #selector(selectDualRowByRow), keyEquivalent: "")
-                byRow.target = self
-                layoutSubmenu.addItem(byRow)
-                let byCol = NSMenuItem(
-                    title: String(localized: "Dual Row, columns first"),
-                    action: #selector(selectDualRowByColumn), keyEquivalent: "")
-                byCol.target = self
-                layoutSubmenu.addItem(byCol)
-            } else {
-                let item = NSMenuItem(title: mode.menuLabel, action: #selector(selectLayout(_:)), keyEquivalent: "")
-                item.tag = mode.rawValue
-                item.target = self
-                layoutSubmenu.addItem(item)
-            }
-        }
-        layoutSubmenu.addItem(NSMenuItem.separator())
-        let variableWidthItem = NSMenuItem(
-            title: String(localized: "Variable width"),
-            action: #selector(toggleVariableWidth), keyEquivalent: "")
-        variableWidthItem.target = self
-        layoutSubmenu.addItem(variableWidthItem)
-
-        layoutMenuItem = NSMenuItem(title: String(localized: "Layout"), action: nil, keyEquivalent: "")
-        layoutMenuItem.submenu = layoutSubmenu
-
-        let iconStyleSubmenu = NSMenu()
-        for style in IconText.allCases {
-            let item = NSMenuItem(title: style.menuLabel, action: #selector(selectIconStyle(_:)), keyEquivalent: "")
-            item.tag = style.rawValue
+        let rowLayoutSubmenu = NSMenu()
+        for layout in RowLayout.allCases {
+            let item = NSMenuItem(title: layout.menuLabel, action: #selector(selectRowLayout(_:)), keyEquivalent: "")
+            item.tag = layout.rawValue
             item.target = self
-            iconStyleSubmenu.addItem(item)
+            rowLayoutSubmenu.addItem(item)
         }
-        iconStyleMenuItem = NSMenuItem(title: String(localized: "Icon Text"), action: nil, keyEquivalent: "")
-        iconStyleMenuItem.submenu = iconStyleSubmenu
+        rowLayoutMenuItem = NSMenuItem(title: String(localized: "Row Layout"), action: nil, keyEquivalent: "")
+        rowLayoutMenuItem.image = NSImage(systemSymbolName: "rectangle.grid.1x2", accessibilityDescription: nil)
+        rowLayoutMenuItem.submenu = rowLayoutSubmenu
 
-        let spacesShownSubmenu = NSMenu()
-        for mode in VisibleSpacesMode.allCases {
-            let item = NSMenuItem(title: mode.menuLabel, action: #selector(selectSpacesShown(_:)), keyEquivalent: "")
-            item.tag = mode.rawValue
-            item.target = self
-            spacesShownSubmenu.addItem(item)
-        }
-        spacesShownSubmenu.addItem(NSMenuItem.separator())
-        let hideFullscreenItem = NSMenuItem(
-            title: String(localized: "Fullscreen Spaces"),
-            action: #selector(toggleHideFullscreenSpaces), keyEquivalent: ""
-        )
-        hideFullscreenItem.target = self
-        spacesShownSubmenu.addItem(hideFullscreenItem)
+        // Icon size submenu is rebuilt dynamically in menuWillOpen
+        iconSizeMenuItem = NSMenuItem(title: String(localized: "Icon Size"), action: nil, keyEquivalent: "")
+        iconSizeMenuItem.image = NSImage(systemSymbolName: "aspectratio", accessibilityDescription: nil)
+        iconSizeMenuItem.submenu = NSMenu()
 
-        spacesShownMenuItem = NSMenuItem(title: String(localized: "Spaces Shown"), action: nil, keyEquivalent: "")
-        spacesShownMenuItem.submenu = spacesShownSubmenu
+        iconTextMenuItem = buildIconTextMenuItem()
+        iconStyleMenuItem = buildIconStyleMenuItem()
+
+        spacesShownMenuItem = buildSpacesShownMenuItem()
 
         statusBarMenu.addItem(about)
         statusBarMenu.addItem(NSMenuItem.separator())
         // Dynamic space items will be inserted starting at index 2
         statusBarMenu.addItem(NSMenuItem.separator())
-        statusBarMenu.addItem(layoutMenuItem)
+        statusBarMenu.addItem(iconSizeMenuItem)
+        statusBarMenu.addItem(iconTextMenuItem)
         statusBarMenu.addItem(iconStyleMenuItem)
+        statusBarMenu.addItem(rowLayoutMenuItem)
         statusBarMenu.addItem(spacesShownMenuItem)
+        statusBarMenu.addItem(NSMenuItem.separator())
+        statusBarMenu.addItem(quickRenameItem)
         statusBarMenu.addItem(NSMenuItem.separator())
         statusBarMenu.addItem(refreshItem)
         statusBarMenu.addItem(prefItem)
@@ -173,35 +169,151 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         statusBarItem.button?.action = #selector(handleClick)
         statusBarItem.button?.target = self
         statusBarItem.button?.sendAction(on: [.rightMouseDown, .leftMouseDown])
+
+        // Scroll wheel on the status bar icon changes the layout size
+        NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self = self,
+                  let buttonWindow = self.statusBarItem.button?.window,
+                  event.window === buttonWindow else { return event }
+            self.handleScroll(event)
+            return nil // consume the event
+        }
+
+        // Tracking area for tooltips on hover
+        if let button = statusBarItem.button {
+            let area = NSTrackingArea(
+                rect: button.bounds,
+                options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                owner: self
+            )
+            button.addTrackingArea(area)
+        }
+    }
+
+    private func buildIconTextMenuItem() -> NSMenuItem {
+        let submenu = NSMenu()
+        for style in IconText.allCases {
+            let item = NSMenuItem(title: style.menuLabel, action: #selector(selectIconStyle(_:)), keyEquivalent: "")
+            item.tag = style.rawValue
+            item.target = self
+            submenu.addItem(item)
+        }
+        submenu.addItem(NSMenuItem.separator())
+        for design in FontDesign.allCases {
+            let item = NSMenuItem(title: design.menuLabel, action: #selector(selectFont(_:)), keyEquivalent: "")
+            item.tag = design.rawValue
+            item.target = self
+            submenu.addItem(item)
+        }
+        let menuItem = NSMenuItem(title: String(localized: "Icon Text"), action: nil, keyEquivalent: "")
+        menuItem.image = NSImage(systemSymbolName: "textformat.abc", accessibilityDescription: nil)
+        menuItem.submenu = submenu
+        return menuItem
+    }
+
+    private func buildIconStyleMenuItem() -> NSMenuItem {
+        let submenu = NSMenu()
+        let noDecoItem = NSMenuItem(
+            title: IconShape.noDecoration.menuLabel,
+            action: #selector(selectIconShape(_:)), keyEquivalent: "")
+        noDecoItem.tag = IconShape.noDecoration.rawValue
+        noDecoItem.target = self
+        submenu.addItem(noDecoItem)
+        submenu.addItem(NSMenuItem.separator())
+        for shape in IconShape.allCases where shape != .noDecoration {
+            let item = NSMenuItem(title: shape.menuLabel, action: #selector(selectIconShape(_:)), keyEquivalent: "")
+            item.tag = shape.rawValue
+            item.target = self
+            submenu.addItem(item)
+        }
+        submenu.addItem(NSMenuItem.separator())
+        for fill in IconFill.allCases {
+            let item = NSMenuItem(title: fill.menuLabel, action: #selector(selectIconFill(_:)), keyEquivalent: "")
+            item.tag = fill.rawValue
+            item.target = self
+            submenu.addItem(item)
+        }
+        let menuItem = NSMenuItem(title: String(localized: "Icon Style"), action: nil, keyEquivalent: "")
+        menuItem.image = NSImage(systemSymbolName: "star", accessibilityDescription: nil)
+        menuItem.submenu = submenu
+        return menuItem
+    }
+
+    private func buildSpacesShownMenuItem() -> NSMenuItem {
+        let submenu = NSMenu()
+        let mainDisplayItem = NSMenuItem(
+            title: String(localized: "Main Display Only"),
+            action: #selector(toggleMainDisplayOnly), keyEquivalent: ""
+        )
+        mainDisplayItem.target = self
+        submenu.addItem(mainDisplayItem)
+        submenu.addItem(NSMenuItem.separator())
+        for mode in VisibleSpacesMode.allCases {
+            let item = NSMenuItem(title: mode.menuLabel, action: #selector(selectSpacesShown(_:)), keyEquivalent: "")
+            item.tag = mode.rawValue
+            item.target = self
+            submenu.addItem(item)
+        }
+        submenu.addItem(NSMenuItem.separator())
+        let showFullscreenItem = NSMenuItem(
+            title: String(localized: "Fullscreen Spaces"),
+            action: #selector(toggleShowFullscreenSpaces), keyEquivalent: ""
+        )
+        showFullscreenItem.target = self
+        submenu.addItem(showFullscreenItem)
+        submenu.addItem(NSMenuItem.separator())
+        let showMCItem = NSMenuItem(
+            title: String(localized: "Mission Control Button"),
+            action: #selector(toggleShowMissionControl), keyEquivalent: ""
+        )
+        showMCItem.target = self
+        submenu.addItem(showMCItem)
+        let showArrowsItem = NSMenuItem(
+            title: String(localized: "Navigation Arrows"),
+            action: #selector(toggleShowNavArrows), keyEquivalent: ""
+        )
+        showArrowsItem.target = self
+        submenu.addItem(showArrowsItem)
+
+        let menuItem = NSMenuItem(title: String(localized: "Buttons Shown"), action: nil, keyEquivalent: "")
+        menuItem.image = NSImage(systemSymbolName: "square.split.2x2.fill", accessibilityDescription: nil)
+        menuItem.submenu = submenu
+        return menuItem
     }
 
     @objc func handleClick(_ sbButton: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else {
             return
         }
-        // Capture the mouse position here, instead of using event.locationInWindow,
-        // which may be invalid for clicks in the 1-2px gap above/below the button.
-        // Also capture the button frame now, before the asyncAfter delay, so that
-        // it is from the same moment as the mouse location.
+        // Capture values synchronously before the asyncAfter delay:
+        // - eventType: On macOS 27+, the event object may be invalidated or reused
+        //   by the time the closure runs, so we must not access event.type later.
+        // - mouseLocation: Use NSEvent.mouseLocation instead of event.locationInWindow,
+        //   which may be invalid for clicks in the 1-2px gap above/below the button.
+        // - buttonFrame: Must be from the same moment as the mouse location.
+        let eventType = event.type
         let mouseLocation = NSEvent.mouseLocation
         let buttonFrame = sbButton.window?.convertToScreen(sbButton.frame) ?? .zero
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            if event.type == .rightMouseDown {
-                // Show the menu on right-click
+            if eventType == .rightMouseDown {
                 if let sbMenu = self.statusBarMenu {
-                    // This calculation is not right, but looks good. This is likely because of the
-                    // NSMenu popup having its own visual padding, borders and/or drop shadows.
+                    let useGrid = self.spaceDisplayMode == .grid
+                    if useGrid {
+                        self.replaceDynamicItemsWithGrid()
+                    }
                     let menuOrigin = CGPoint(
                         x: buttonFrame.minX,
-                        y: buttonFrame.minY - CGFloat(self.iconCreator.sizes.FONT_SIZE) / 2)
+                        y: buttonFrame.minY - CGFloat(self.iconCreator.sizes.fontSize) / 2)
                     sbMenu.minimumWidth = Constants.minMenuWidth
                     sbMenu.popUp(positioning: nil, at: menuOrigin, in: nil)
                     sbButton.isHighlighted = false
+                    if useGrid {
+                        self.restoreDynamicItemsAsList()
+                    }
                 }
-            } else if event.type == .leftMouseDown {
+            } else if eventType == .leftMouseDown {
                 // Switch desktops on left click, unless one single space shown
                 guard self.visibleSpacesMode != .currentOnly else {
-                    print("Not switching: just one space visible")
                     return
                 }
                 // Use screen coordinates for hit testing; sbButton.convert() returns
@@ -210,15 +322,69 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
                     x: mouseLocation.x - buttonFrame.minX,
                     y: mouseLocation.y - buttonFrame.minY)
                 // Convert to image-relative coordinates for hit testing
-                let imageWidth = sbButton.image?.size.width ?? sbButton.bounds.width
-                let margin = max((sbButton.bounds.width - imageWidth) / 2.0, 0)
-                let adjPoint = NSPoint(x: locationInButton.x - margin, y: locationInButton.y)
+                let adjPoint = NSPoint(
+                    x: locationInButton.x - self.imageHorizontalMargin(of: sbButton),
+                    y: locationInButton.y)
+                let widths = self.iconCreator.iconWidths
+                    .map { "\($0.index):\(Int($0.left))..\(Int($0.right))" }
+                    .joined(separator: " ")
+                Self.clickLog.log(
+                    """
+                    click \
+                    mouse=(\(Int(mouseLocation.x), privacy: .public),\(Int(mouseLocation.y), privacy: .public)) \
+                    btn=(\
+                        \(Int(buttonFrame.minX), privacy: .public),\(Int(buttonFrame.minY), privacy: .public) \
+                        \(Int(buttonFrame.width), privacy: .public)x\(Int(buttonFrame.height), privacy: .public)\
+                    ) \
+                    win=(\
+                        \(Int(sbButton.window?.frame.minX ?? -1), privacy: .public),\
+                        \(Int(sbButton.window?.frame.width ?? -1), privacy: .public)\
+                    ) \
+                    adj=(\(Int(adjPoint.x), privacy: .public),\(Int(adjPoint.y), privacy: .public)) \
+                    spaces=\(self.currentSpaces.count, privacy: .public) \
+                    widths=[\(widths, privacy: .public)]
+                    """)
                 self.spaceSwitcher.switchUsingLocation(
                     iconWidths: self.iconCreator.iconWidths,
                     point: adjPoint,
-                    onError: self.flashStatusBar)
-            } else {
-                print("Other event: \(event.type)")
+                    spaces: self.currentSpaces,
+                    onError: self.flashStatusBar,
+                    onShowBalloon: { [weak self] kind in
+                        self?.showMissingShortcutBalloon(kind: kind)
+                    })
+            }
+        }
+    }
+
+    private func handleScroll(_ event: NSEvent) {
+        guard event.modifierFlags.contains(.option) else { return }
+        let now = Date()
+        if now.timeIntervalSince(lastScrollTime) > 0.3 {
+            scrollAccumulator = 0
+        }
+        lastScrollTime = now
+        scrollAccumulator += event.scrollingDeltaY
+        let threshold: CGFloat = 8
+
+        if scrollAccumulator > threshold {
+            scrollAccumulator = 0
+            var next = iconSize.larger
+            while let candidate = next, rowLayout.isTwoRows && Constants.sizesTwoRows[candidate] == nil {
+                next = candidate.larger
+            }
+            if let next = next {
+                iconSize = next
+                postSettingsChanged()
+            }
+        } else if scrollAccumulator < -threshold {
+            scrollAccumulator = 0
+            var next = iconSize.smaller
+            while let candidate = next, rowLayout.isTwoRows && Constants.sizesTwoRows[candidate] == nil {
+                next = candidate.smaller
+            }
+            if let next = next {
+                iconSize = next
+                postSettingsChanged()
             }
         }
     }
@@ -240,6 +406,100 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         }
     }
 
+    // MARK: - Missing Shortcut Balloon
+
+    private func showMissingShortcutBalloon(kind: MissingShortcutKind) {
+        dismissMissingShortcutBalloon()
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+
+        let viewController = NSViewController()
+        let hostingView = NSHostingView(rootView: MissingShortcutBalloonView(
+            kind: kind,
+            onConfigure: { [weak self] in
+                self?.dismissMissingShortcutBalloon()
+                openMissionControlShortcuts()
+            }
+        ))
+        hostingView.frame.size = hostingView.intrinsicContentSize
+        viewController.view = hostingView
+        popover.contentViewController = viewController
+
+        if let button = statusBarItem.button {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+        missingShortcutBalloon = popover
+    }
+
+    private func dismissMissingShortcutBalloon() {
+        missingShortcutBalloon?.close()
+        missingShortcutBalloon = nil
+    }
+
+    // MARK: - Tooltips
+
+    @objc(mouseEntered:) func mouseEntered(with event: NSEvent) {
+        // Required by NSTrackingArea with .mouseEnteredAndExited; no action needed
+    }
+
+    @objc(mouseMoved:) func mouseMoved(with event: NSEvent) {
+        guard let button = statusBarItem.button else { return }
+        let locationInButton = button.convert(event.locationInWindow, from: nil)
+        let x = locationInButton.x - imageHorizontalMargin(of: button)
+
+        let imageHeight = button.image?.size.height ?? button.bounds.height
+        let y = imageHeight - (locationInButton.y - imageVerticalMargin(of: button))
+        var tooltip: String?
+        for iconWidth in iconCreator.iconWidths {
+            let hitX = x >= iconWidth.left && x < iconWidth.right
+            let hasY = iconWidth.top != 0 || iconWidth.bottom != 0
+            let hitY = hasY ? (y >= iconWidth.top && y < iconWidth.bottom) : true
+            if hitX && hitY {
+                switch iconWidth.index {
+                case Space.previousSpaceIndex:     tooltip = String(localized: "Previous")
+                case Space.missionControlIndex:    tooltip = String(localized: "Mission Control")
+                case Space.nextSpaceIndex:         tooltip = String(localized: "Next")
+                default:
+                    if let space = currentSpaces.first(where: { $0.spaceNumber == iconWidth.spaceNumber }),
+                       !space.spaceName.isEmpty {
+                        tooltip = space.spaceName
+                    }
+                }
+                break
+            }
+        }
+        button.toolTip = tooltip
+    }
+
+    @objc(mouseExited:) func mouseExited(with event: NSEvent) {
+        statusBarItem.button?.toolTip = nil
+    }
+
+    /// The horizontal centering margin between the button edge and the image,
+    /// when the image is narrower than the button.
+    private func imageHorizontalMargin(of button: NSStatusBarButton) -> CGFloat {
+        let imageWidth = button.image?.size.width ?? button.bounds.width
+        return max((button.bounds.width - imageWidth) / 2.0, 0)
+    }
+
+    /// The vertical centering margin between the button edge and the image,
+    /// when the image is shorter than the button.
+    private func imageVerticalMargin(of button: NSStatusBarButton) -> CGFloat {
+        let imageHeight = button.image?.size.height ?? button.bounds.height
+        return max((button.bounds.height - imageHeight) / 2.0, 0)
+    }
+
+    func isIconVisible() -> Bool {
+        guard let window = statusBarItem.button?.window else { return false }
+        return window.occlusionState.contains(.visible)
+    }
+
+    func statusBarWindow() -> NSWindow? {
+        return statusBarItem.button?.window
+    }
+
     func getButtonFrame() -> NSRect? {
         return statusBarItem.button?.frame
     }
@@ -248,33 +508,35 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         return statusBarItem.button?.effectiveAppearance
     }
 
+    func reloadShortcuts() {
+        spaceSwitcher.shortcutSwitcher.reloadShortcuts()
+    }
+
     func updateStatusBar(withIcon icon: NSImage, withSpaces spaces: [Space]) {
+        currentSpaces = spaces
         // update icon
         if let statusBarButton = statusBarItem.button {
             statusBarButton.image = icon
         }
         // update menu
-        guard spaces.count > 0 else {
+        guard !spaces.isEmpty else {
             return
         }
-        // Remove previously inserted dynamic items between the fixed header and the settings submenus
-        let boundaryIdx = statusBarMenu.index(of: layoutMenuItem)
-        // There's a separator before layoutMenuItem; dynamic items sit between index 2 and that separator
-        let separatorIdx = boundaryIdx - 1
-        if separatorIdx > 2 {
-            for _ in 2..<separatorIdx { statusBarMenu.removeItem(at: 2) }
-        }
+        removeDynamicMenuItems()
         // Build items grouped by display with a separator between displays.
         var itemsToInsert: [NSMenuItem] = []
         var lastDisplayID: String?
         let switchMap = Space.buildSwitchIndexMap(for: spaces)
+        let enabledMap = spaceSwitcher.shortcutSwitcher.buildEnabledSwitchMap(for: spaces)
         for space in spaces {
             if let last = lastDisplayID, last != space.displayID {
                 itemsToInsert.append(NSMenuItem.separator())
             }
             let idx = switchMap[space.spaceID]
             let desktopNum: Int? = if let idx, idx > 0 { idx } else { nil }
-            itemsToInsert.append(makeSwitchToSpaceItem(space: space, desktopNumber: desktopNum))
+            itemsToInsert.append(makeSwitchToSpaceItem(
+                space: space, desktopNumber: desktopNum, spaces: spaces,
+                enabledSwitchMap: enabledMap))
             lastDisplayID = space.displayID
         }
         // No trailing separator needed — the fixed separator before the settings submenus handles it
@@ -283,98 +545,419 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         for item in itemsToInsert { statusBarMenu.insertItem(item, at: insertIndex); insertIndex += 1 }
     }
 
+    /// Remove all dynamic items between the about header (index 2) and the settings submenus.
+    private func removeDynamicMenuItems() {
+        let boundaryIdx = statusBarMenu.index(of: iconSizeMenuItem)
+        let separatorIdx = boundaryIdx - 1
+        if separatorIdx > 2 {
+            for _ in 2..<separatorIdx { statusBarMenu.removeItem(at: 2) }
+        }
+    }
+
+    /// Replace the space list with a grid view for Option+right-click.
+    private func replaceDynamicItemsWithGrid() {
+        removeDynamicMenuItems()
+        let switchMap = Space.buildSwitchIndexMap(for: currentSpaces)
+        let enabledMap = spaceSwitcher.shortcutSwitcher.buildEnabledSwitchMap(for: currentSpaces)
+        let gridItem = NSMenuItem()
+        let gridView = NSHostingView(rootView: SpaceGridMenuView(
+            spaces: currentSpaces,
+            onSwitch: { [weak self] tag in
+                self?.statusBarMenu.cancelTracking()
+                self?.handleSwitchTag(tag)
+            },
+            switchMap: switchMap,
+            enabledSwitchMap: enabledMap,
+            hasArrowShortcuts: spaceSwitcher.shortcutSwitcher.hasArrowShortcuts,
+            focusedDisplayID: SwitchOrchestrator.focusedDisplayID(from: currentSpaces),
+            menuWidth: Constants.minMenuWidth
+        ))
+        gridView.frame.size = gridView.fittingSize
+        gridView.sizingOptions = [.intrinsicContentSize]
+        gridItem.view = gridView
+        statusBarMenu.insertItem(gridItem, at: 2)
+    }
+
+    /// Restore the normal space list after the grid menu closes.
+    private func restoreDynamicItemsAsList() {
+        removeDynamicMenuItems()
+        var itemsToInsert: [NSMenuItem] = []
+        var lastDisplayID: String?
+        let switchMap = Space.buildSwitchIndexMap(for: currentSpaces)
+        let enabledMap = spaceSwitcher.shortcutSwitcher.buildEnabledSwitchMap(for: currentSpaces)
+        for space in currentSpaces {
+            if let last = lastDisplayID, last != space.displayID {
+                itemsToInsert.append(NSMenuItem.separator())
+            }
+            let idx = switchMap[space.spaceID]
+            let desktopNum: Int? = if let idx, idx > 0 { idx } else { nil }
+            itemsToInsert.append(makeSwitchToSpaceItem(
+                space: space, desktopNumber: desktopNum, spaces: currentSpaces,
+                enabledSwitchMap: enabledMap))
+            lastDisplayID = space.displayID
+        }
+        var insertIndex = 2
+        for item in itemsToInsert { statusBarMenu.insertItem(item, at: insertIndex); insertIndex += 1 }
+    }
+
     @objc func refreshSpaces(_ sender: AnyObject) {
-        NotificationCenter.default.post(name: NSNotification.Name("ButtonPressed"), object: nil)
+        postSettingsChanged()
+    }
+
+    // MARK: - Quick Rename
+
+    @objc func quickRenameCurrentSpace(_ sender: AnyObject) {
+        showQuickRenamePanel()
+    }
+
+    func showQuickRenamePanel() {
+        // Dismiss any existing panel
+        quickRenamePanel?.close()
+        quickRenamePanel = nil
+
+        // Find the current space on the frontmost display
+        let activeSpaces = currentSpaces.filter { $0.isCurrentSpace }
+        guard !activeSpaces.isEmpty else { return }
+
+        let currentSpace: Space
+        if activeSpaces.count == 1 {
+            currentSpace = activeSpaces[0]
+        } else if let mainScreen = NSScreen.main,
+                  let screenNumber = mainScreen.deviceDescription[
+                      NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
+            let mainDisplayID = CGDirectDisplayID(screenNumber.uint32Value)
+            currentSpace = activeSpaces.first { space in
+                let uuid = CFUUIDCreateFromString(kCFAllocatorDefault, space.displayID as CFString)
+                return CGDisplayGetDisplayIDFromUUID(uuid) == mainDisplayID
+            } ?? activeSpaces[0]
+        } else {
+            currentSpace = activeSpaces[0]
+        }
+
+        let spaceID = currentSpace.spaceID
+        let currentName = currentSpace.spaceName
+        let currentColorHex = currentSpace.colorHex
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 1),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false)
+        panel.title = String(
+            localized: "Rename Space \(currentSpace.spaceLabel)")
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.titlebarAppearsTransparent = true
+        panel.isMovableByWindowBackground = true
+        panel.becomesKeyOnlyIfNeeded = false
+
+        let renameView = QuickRenameView(
+            currentName: currentName,
+            currentColorHex: currentColorHex,
+            onRename: { [weak self] newName in
+                self?.applyQuickRename(spaceID: spaceID, newName: newName)
+                self?.quickRenamePanel?.close()
+                self?.quickRenamePanel = nil
+            },
+            onColorChange: { [weak self] newColor in
+                self?.applyColorChange(spaceID: spaceID, color: newColor)
+            },
+            onCancel: { [weak self] in
+                self?.quickRenamePanel?.close()
+                self?.quickRenamePanel = nil
+            })
+        let hostingView = NSHostingView(rootView: renameView)
+        panel.contentView = hostingView
+
+        // Position near the status bar item
+        if let buttonFrame = statusBarItem.button?.window?.frame {
+            let x = buttonFrame.midX - 170
+            let y = buttonFrame.minY - 4
+            panel.setFrameTopLeftPoint(NSPoint(x: x, y: y))
+        } else {
+            panel.center()
+        }
+
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        quickRenamePanel = panel
+    }
+
+    private func applyQuickRename(spaceID: String, newName: String) {
+        let nameStore = SpaceNameStore.shared
+        nameStore.update { stored in
+            guard let info = stored[spaceID] else { return }
+            stored[spaceID] = info.withName(newName)
+        }
+        postSettingsChanged()
+    }
+
+    private func applyColorChange(spaceID: String, color: NSColor?) {
+        let nameStore = SpaceNameStore.shared
+        nameStore.update { stored in
+            guard let info = stored[spaceID] else { return }
+            stored[spaceID] = info.withColor(color?.toHexString())
+        }
+        postSettingsChanged()
     }
 
     // MARK: - Settings Submenus
 
     func menuWillOpen(_ menu: NSMenu) {
-        // Update checkmarks on submenu items to reflect current settings
-        for item in layoutMenuItem.submenu?.items ?? [] {
-            if item.action == #selector(selectDualRowByColumn) {
-                item.state = (layoutMode == .dualRows && dualRowFillOrder == .byColumn) ? .on : .off
-            } else if item.action == #selector(selectDualRowByRow) {
-                item.state = (layoutMode == .dualRows && dualRowFillOrder == .byRow) ? .on : .off
-            } else if item.action == #selector(toggleVariableWidth) {
-                item.state = useVariableWidth ? .on : .off
-            } else {
-                item.state = item.tag == layoutMode.rawValue ? .on : .off
+        // Read fresh from UserDefaults — @AppStorage on NSObject caches the
+        // initial value and does not observe external writes (e.g. from Preferences).
+        let defaults = UserDefaults.standard
+        let currentRowLayout = RowLayout(rawValue: defaults.integer(forKey: "rowLayout")) ?? .singleRow
+        let currentIconSize = IconSize(rawValue: defaults.integer(forKey: "iconSize")) ?? .medium
+        let currentDisplayStyle = IconText(rawValue: defaults.integer(forKey: "iconText")) ?? .numbers
+        let currentFontDesign = FontDesign(rawValue: defaults.integer(forKey: "fontDesign")) ?? .monospaced
+        let currentUseVariableWidth = defaults.bool(forKey: "useVariableWidth")
+        let currentDecorationActive =
+                IconStyle(rawValue: defaults.integer(forKey: "decorationActive")) ?? .filledRounded
+        let currentDecorationInactive =
+                IconStyle(rawValue: defaults.integer(forKey: "decorationInactive")) ?? .borderedRounded
+        let currentShowFullscreenSpaces = defaults.object(forKey: "showFullscreenSpaces") as? Bool ?? true
+        let currentMainDisplayOnly = defaults.bool(forKey: "mainDisplayOnly")
+        let currentShowMissionControl = defaults.bool(forKey: "showMissionControl")
+        let currentShowNavArrows = defaults.bool(forKey: "showNavArrows")
+        let currentVisibleSpacesModeRaw = defaults.integer(forKey: "visibleSpacesMode")
+
+        // Update row layout checkmarks
+        for item in rowLayoutMenuItem.submenu?.items ?? [] {
+            item.state = item.tag == currentRowLayout.rawValue ? .on : .off
+        }
+        // Rebuild icon size submenu: filter sizes based on two-row mode
+        let layoutSubmenu = NSMenu()
+        let availableSizes = currentRowLayout.isTwoRows
+            ? IconSize.allCases.filter { Constants.sizesTwoRows[$0] != nil }
+            : Array(IconSize.allCases)
+        for mode in availableSizes {
+            let item = NSMenuItem(title: mode.menuLabel, action: #selector(selectLayout(_:)), keyEquivalent: "")
+            item.tag = mode.rawValue
+            item.target = self
+            item.state = mode == currentIconSize ? .on : .off
+            layoutSubmenu.addItem(item)
+        }
+        layoutSubmenu.addItem(NSMenuItem.separator())
+        let variableWidthItem = NSMenuItem(
+            title: String(localized: "Variable width"),
+            action: #selector(toggleVariableWidth), keyEquivalent: "")
+        variableWidthItem.target = self
+        variableWidthItem.state = currentUseVariableWidth ? .on : .off
+        layoutSubmenu.addItem(variableWidthItem)
+        iconSizeMenuItem.submenu = layoutSubmenu
+        for item in iconTextMenuItem.submenu?.items ?? [] {
+            if item.action == #selector(selectIconStyle(_:)) {
+                item.state = item.tag == currentDisplayStyle.rawValue ? .on : .off
+            } else if item.action == #selector(selectFont(_:)) {
+                item.state = item.tag == currentFontDesign.rawValue ? .on : .off
             }
         }
+        let bothNoDecoration = currentDecorationActive.isNoDecoration && currentDecorationInactive.isNoDecoration
+        let shapesMatch = !bothNoDecoration
+            && !currentDecorationActive.isNoDecoration && !currentDecorationInactive.isNoDecoration
+            && currentDecorationActive.shape == currentDecorationInactive.shape
+        let fillsMatch = !bothNoDecoration
+            && !currentDecorationActive.isNoDecoration && !currentDecorationInactive.isNoDecoration
+            && currentDecorationActive.fill == currentDecorationInactive.fill
         for item in iconStyleMenuItem.submenu?.items ?? [] {
-            item.state = item.tag == displayStyle.rawValue ? .on : .off
+            if item.action == #selector(selectIconShape(_:)) {
+                if item.tag == IconShape.noDecoration.rawValue {
+                    item.state = bothNoDecoration ? .on : .off
+                } else {
+                    item.state = (shapesMatch && item.tag == currentDecorationActive.shape.rawValue) ? .on : .off
+                }
+            } else if item.action == #selector(selectIconFill(_:)) {
+                item.state = (fillsMatch && item.tag == currentDecorationActive.fill.rawValue) ? .on : .off
+            }
         }
         for item in spacesShownMenuItem.submenu?.items ?? [] {
-            if item.action == #selector(toggleHideFullscreenSpaces) {
-                item.state = hideFullscreenSpaces ? .off : .on
+            if item.action == #selector(toggleShowFullscreenSpaces) {
+                item.state = currentShowFullscreenSpaces ? .on : .off
+            } else if item.action == #selector(toggleMainDisplayOnly) {
+                item.state = currentMainDisplayOnly ? .on : .off
+            } else if item.action == #selector(toggleShowMissionControl) {
+                item.state = currentShowMissionControl ? .on : .off
+            } else if item.action == #selector(toggleShowNavArrows) {
+                item.state = currentShowNavArrows ? .on : .off
             } else {
-                item.state = item.tag == visibleSpacesModeRaw ? .on : .off
+                item.state = item.tag == currentVisibleSpacesModeRaw ? .on : .off
             }
         }
+    }
+
+    @objc func selectRowLayout(_ sender: NSMenuItem) {
+        guard let layout = RowLayout(rawValue: sender.tag) else { return }
+        rowLayout = layout
+        if layout.isTwoRows {
+            iconSize = Constants.nearestTwoRowIconSize(for: iconSize)
+        }
+        postSettingsChanged()
     }
 
     @objc func selectLayout(_ sender: NSMenuItem) {
-        guard let mode = LayoutMode(rawValue: sender.tag) else { return }
-        layoutMode = mode
-        NotificationCenter.default.post(name: NSNotification.Name("ButtonPressed"), object: nil)
-    }
-
-    @objc func selectDualRowByColumn() {
-        layoutMode = .dualRows
-        dualRowFillOrder = .byColumn
-        NotificationCenter.default.post(name: NSNotification.Name("ButtonPressed"), object: nil)
-    }
-
-    @objc func selectDualRowByRow() {
-        layoutMode = .dualRows
-        dualRowFillOrder = .byRow
-        NotificationCenter.default.post(name: NSNotification.Name("ButtonPressed"), object: nil)
+        guard let mode = IconSize(rawValue: sender.tag) else { return }
+        iconSize = mode
+        postSettingsChanged()
     }
 
     @objc func toggleVariableWidth() {
         useVariableWidth.toggle()
-        NotificationCenter.default.post(name: NSNotification.Name("ButtonPressed"), object: nil)
+        postSettingsChanged()
+    }
+
+    @objc func selectFont(_ sender: NSMenuItem) {
+        guard let design = FontDesign(rawValue: sender.tag) else { return }
+        fontDesign = design
+        postSettingsChanged()
     }
 
     @objc func selectIconStyle(_ sender: NSMenuItem) {
         guard let style = IconText(rawValue: sender.tag) else { return }
-        displayStyle = style
-        NotificationCenter.default.post(name: NSNotification.Name("ButtonPressed"), object: nil)
+        iconText = style
+        postSettingsChanged()
+    }
+
+    @objc func selectIconShape(_ sender: NSMenuItem) {
+        guard let shape = IconShape(rawValue: sender.tag) else { return }
+
+        // Read fresh from UserDefaults — @AppStorage on NSObject caches the
+        // initial value and does not observe external writes (e.g. from Preferences).
+        let defaults = UserDefaults.standard
+        let currentActive = IconStyle(rawValue: defaults.integer(forKey: "decorationActive")) ?? .filledRounded
+        let currentInactive = IconStyle(rawValue: defaults.integer(forKey: "decorationInactive")) ?? .borderedRounded
+        let currentLastActiveFill = IconFill(rawValue: defaults.integer(forKey: "lastActiveFill")) ?? .filled
+        let currentLastInactiveFill = IconFill(rawValue: defaults.integer(forKey: "lastInactiveFill")) ?? .bordered
+
+        if shape == .noDecoration {
+            // Save current decoration before switching to noDecoration (using fresh values)
+            if !currentActive.isNoDecoration {
+                lastActiveShape = currentActive.shape
+                lastActiveFill = currentActive.fill
+            }
+            if !currentInactive.isNoDecoration {
+                lastInactiveShape = currentInactive.shape
+                lastInactiveFill = currentInactive.fill
+            }
+            decorationActive = .noDecoration
+            decorationInactive = .noDecoration
+        } else {
+            let activeFill = currentActive.isNoDecoration
+                ? currentLastActiveFill
+                : currentActive.fill
+            let inactiveFill = currentInactive.isNoDecoration
+                ? currentLastInactiveFill
+                : currentInactive.fill
+            decorationActive = currentActive.withShape(shape).withFill(activeFill)
+            decorationInactive = currentInactive.withShape(shape).withFill(inactiveFill)
+            saveLastDecoration()
+        }
+        postSettingsChanged()
+    }
+
+    @objc func selectIconFill(_ sender: NSMenuItem) {
+        guard let fill = IconFill(rawValue: sender.tag) else { return }
+
+        // Read fresh from UserDefaults — @AppStorage on NSObject caches the
+        // initial value and does not observe external writes (e.g. from Preferences).
+        let defaults = UserDefaults.standard
+        let currentActive = IconStyle(rawValue: defaults.integer(forKey: "decorationActive")) ?? .filledRounded
+        let currentInactive = IconStyle(rawValue: defaults.integer(forKey: "decorationInactive")) ?? .borderedRounded
+        let currentLastActiveShape = IconShape(rawValue: defaults.integer(forKey: "lastActiveShape")) ?? .rounded
+        let currentLastInactiveShape = IconShape(rawValue: defaults.integer(forKey: "lastInactiveShape")) ?? .rounded
+
+        let activeShape = currentActive.isNoDecoration
+            ? currentLastActiveShape
+            : currentActive.shape
+        let inactiveShape = currentInactive.isNoDecoration
+            ? currentLastInactiveShape
+            : currentInactive.shape
+        decorationActive = currentActive.withFill(fill).withShape(activeShape)
+        decorationInactive = currentInactive.withFill(fill).withShape(inactiveShape)
+        saveLastDecoration()
+        postSettingsChanged()
+    }
+
+    private func saveLastDecoration() {
+        if !decorationActive.isNoDecoration {
+            lastActiveShape = decorationActive.shape
+            lastActiveFill = decorationActive.fill
+        }
+        if !decorationInactive.isNoDecoration {
+            lastInactiveShape = decorationInactive.shape
+            lastInactiveFill = decorationInactive.fill
+        }
     }
 
     @objc func selectSpacesShown(_ sender: NSMenuItem) {
-        visibleSpacesModeRaw = sender.tag
-        NotificationCenter.default.post(name: NSNotification.Name("ButtonPressed"), object: nil)
+        guard let mode = VisibleSpacesMode(rawValue: sender.tag) else { return }
+        visibleSpacesMode = mode
+        postSettingsChanged()
     }
 
-    @objc func toggleHideFullscreenSpaces() {
-        hideFullscreenSpaces.toggle()
-        NotificationCenter.default.post(name: NSNotification.Name("ButtonPressed"), object: nil)
+    @objc func toggleShowFullscreenSpaces() {
+        showFullscreenSpaces.toggle()
+        postSettingsChanged()
+    }
+
+    @objc func toggleMainDisplayOnly() {
+        mainDisplayOnly.toggle()
+        postSettingsChanged()
+    }
+
+    @objc func toggleShowMissionControl() {
+        showMissionControl.toggle()
+        postSettingsChanged()
+    }
+
+    @objc func toggleShowNavArrows() {
+        showNavArrows.toggle()
+        postSettingsChanged()
     }
 
     @objc func showPreferencesWindow(_ sender: AnyObject) {
-        let hostedPrefsView = NSHostingView(rootView: PreferencesView(parentWindow: prefsWindow))
+        let hostedPrefsView = NSHostingView(
+            rootView: PreferencesView(
+                tabState: prefsWindow.tabState,
+                onCheckForUpdates: { [weak self] in
+                    self?.updaterController.checkForUpdates(nil)
+                }))
+        hostedPrefsView.sizingOptions = [.intrinsicContentSize]
         prefsWindow.contentView = hostedPrefsView
 
+        // Observe tab changes to resize the window
+        if tabChangeObserver == nil {
+            tabChangeObserver = NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("PreferencesTabChanged"),
+                object: nil, queue: .main
+            ) { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.prefsWindow.resizeToFitContent()
+                }
+            }
+        }
+
+        prefsWindow.resizeToFitContent(animate: false)
         prefsWindow.center()
         prefsWindow.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
-    func makeSwitchToSpaceItem(space: Space, desktopNumber: Int?) -> NSMenuItem {
+    func makeSwitchToSpaceItem(
+        space: Space, desktopNumber: Int?, spaces: [Space],
+        enabledSwitchMap: [String: Int]? = nil
+    ) -> NSMenuItem {
         let spaceName = space.spaceName.isEmpty ? "-" : space.spaceName
 
-        let mask = shortcutHelper.getModifiersAsFlags()
         var shortcutKey = ""
-        if let n = desktopNumber {
-            if n >= 1 && n <= 9 {
-                shortcutKey = String(n)
-            } else if n == 10 {
-                shortcutKey = "0"
-            }
+        var mask = NSEvent.ModifierFlags()
+        if let desktopNumber,
+           let shortcut = spaceSwitcher.shortcutSwitcher.shortcut(forDesktop: desktopNumber) {
+            shortcutKey = shortcut.keyEquivalent
+            mask = shortcut.modifierFlags
         }
 
+        let enabledTag = enabledSwitchMap?[space.spaceID]
         let menuIcon = iconCreator.createMenuItemIcon(space: space, fraction: 0.6)
         let item = NSMenuItem(
             title: spaceName,
@@ -384,7 +967,14 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
         item.target = self
         item.tag = desktopNumber ?? -(space.spaceNumber)
         item.image = menuIcon
-        if space.isCurrentSpace || shortcutKey == "" {
+        let mode = SwitchingMode(rawValue: switchingMode) ?? .smooth
+        let canSwitch = Space.canSwitch(
+            space: space, switchTag: enabledTag,
+            switchingMode: mode, spaces: spaces,
+            enabledSwitchMap: enabledSwitchMap,
+            hasArrowShortcuts: spaceSwitcher.shortcutSwitcher.hasArrowShortcuts,
+            focusedDisplayID: SwitchOrchestrator.focusedDisplayID(from: spaces))
+        if !canSwitch {
             item.isEnabled = false
             if space.isCurrentSpace {
                 item.state = .on // tick mark
@@ -394,11 +984,25 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
     }
 
     @objc func switchToSpace(_ sender: NSMenuItem) {
-        let spaceNumber = sender.tag
-        guard spaceNumber >= 1 && spaceNumber <= 10 else {
-            return
-        }
-        spaceSwitcher.switchToSpace(spaceNumber: spaceNumber, onError: flashStatusBar)
+        handleSwitchTag(sender.tag)
+    }
+
+    private func handleSwitchTag(_ tag: Int) {
+        let ctx = SwitchContext(
+            entryPoint: .menu,
+            mode: SwitchingMode(rawValue: switchingMode) ?? .smooth,
+            spaces: currentSpaces,
+            enabledSwitchMap: spaceSwitcher.shortcutSwitcher
+                .buildEnabledSwitchMap(for: currentSpaces),
+            hasArrowShortcuts: spaceSwitcher.shortcutSwitcher
+                .hasArrowShortcuts,
+            focusedDisplayID: SwitchOrchestrator
+                .focusedDisplayID(from: currentSpaces))
+        let strategy = SwitchStrategizer.resolveStrategy(
+            switchTag: tag, context: ctx)
+        spaceSwitcher.executeStrategy(
+            strategy, spaces: currentSpaces,
+            onError: flashStatusBar)
     }
 
     // MARK: - SPUStandardUserDriverDelegate
@@ -412,7 +1016,7 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         // Update is available - show badge with version number
         DispatchQueue.main.async {
-            self.updatesItem.title = String(localized: "Update available...")
+            self.updatesItem.title = String(localized: "Update available…")
             if #available(macOS 14.0, *) {
                 let versionString = item.displayVersionString
                 self.updatesItem.badge = NSMenuItemBadge(string: "v\(versionString)")
@@ -423,7 +1027,7 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
     func hideBadge() {
         // Hide the 'available' badge in the menu
         DispatchQueue.main.async {
-            self.updatesItem.title = String(localized: "Check for updates...")
+            self.updatesItem.title = String(localized: "Check for Updates…")
             if #available(macOS 14.0, *) {
                 self.updatesItem.badge = nil
             }
@@ -443,5 +1047,42 @@ class StatusBar: NSObject, NSMenuDelegate, SPUUpdaterDelegate, SPUStandardUserDr
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
         // About to install
         hideBadge()
+    }
+}
+
+// MARK: - Missing Shortcut Balloon
+
+private struct MissingShortcutBalloonView: View {
+    var kind: MissingShortcutKind
+    var onConfigure: () -> Void
+
+    private var imageName: String {
+        switch kind {
+        case .navigation: return "MCShortcutsNavigation"
+        case .desktop:    return "MCShortcutsDesktops"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("No shortcut known")
+                .font(.system(size: 13, weight: .medium))
+            Text("Enable under Keyboard → Shortcuts → Mission Control:")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+            Image(imageName)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: 320)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            Text("You are free to choose any shortcut key you like.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+            Button("Configure") {
+                onConfigure()
+            }
+            .font(.system(size: 12))
+        }
+        .padding(14)
     }
 }

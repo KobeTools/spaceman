@@ -12,41 +12,88 @@ struct Space: Equatable {
     var spaceID: String          // OS space ID
     var spaceName: String        // space name, user assigned
     var spaceNumber: Int         // space number, sequential, not restarted
-    var spaceByDesktopID: String // space number as shown (possibly restarted)
+    var spaceLabel: String // space number as shown (possibly restarted)
     var isCurrentSpace: Bool
     var isFullScreen: Bool
     var colorHex: String?        // Custom color tint (hex string)
 
-    /// Switch index used when a space has no keyboard shortcut (e.g. beyond desktop 10).
-    /// Any negative index causes SpaceSwitcher to trigger onError instead of switching.
+    /// Maximum number of desktops that macOS supports keyboard shortcuts for (IDs 118–133).
+    static let maxSwitchableDesktop = 16
+
+    // Special switch indices. Desktops use 1–maxSwitchableDesktop.
+    // These are deliberately far below that range to avoid collisions.
+
+    /// Switch index used when a space has no keyboard shortcut.
     static let unswitchableIndex = -99
 
+    /// Switch index for the Mission Control button.
+    static let missionControlIndex = -100
+
+    /// Switch index for the previous-space arrow (Ctrl+Left).
+    static let previousSpaceIndex = -101
+
+    /// Switch index for the next-space arrow (Ctrl+Right).
+    static let nextSpaceIndex = -102
+
     /// Build a mapping from spaceID to Mission Control switch index.
-    /// Regular desktops get 1, 2, ... up to 10 (matching ⌃1–⌃0 shortcuts).
-    /// Desktops beyond 10 are omitted.
-    ///
-    /// Switching to fullscreen spaces is not a Spaceman feature. As an
-    /// exception, the first fullscreen space (F1) is switchable via menu bar
-    /// icon click only. It is mapped to index -1 (the minus key). Additional
-    /// fullscreen spaces are intentionally omitted from the map so they get
-    /// `unswitchableIndex` and trigger an error flash instead.
+    /// Regular desktops get 1, 2, ... up to `maxSwitchableDesktop` (matching
+    /// keyboard shortcuts read from macOS user defaults). Beyond that, omitted.
+    /// Fullscreen spaces are not in the map (no macOS shortcut exists for them).
     static func buildSwitchIndexMap(for spaces: [Space]) -> [String: Int] {
         var map: [String: Int] = [:]
         var desktopIndex = 1
-        var fullscreenIndex = 1
-        for s in spaces {
-            if s.isFullScreen {
-                if fullscreenIndex <= 1 {
-                    map[s.spaceID] = -fullscreenIndex
-                }
-                fullscreenIndex += 1
-            } else {
-                if desktopIndex <= 10 {
-                    map[s.spaceID] = desktopIndex
-                }
-                desktopIndex += 1
+        for space in spaces where !space.isFullScreen {
+            if desktopIndex <= maxSwitchableDesktop {
+                map[space.spaceID] = desktopIndex
             }
+            desktopIndex += 1
         }
         return map
+    }
+
+    /// Whether a space can be switched to, given its switch map tag.
+    /// Used by both grid and list views to determine if a space is clickable.
+    static func canSwitch(
+        space: Space, switchTag: Int?,
+        switchingMode: SwitchingMode = .smooth,
+        spaces: [Space] = [],
+        enabledSwitchMap: [String: Int]? = nil,
+        hasArrowShortcuts: Bool = true,
+        focusedDisplayID: String? = nil
+    ) -> Bool {
+        guard !space.isCurrentSpace else { return false }
+        // Gesture mode, same display: always reachable
+        if switchingMode != .smooth {
+            if let focusedID = focusedDisplayID {
+                if space.displayID == focusedID {
+                    return true
+                }
+            } else {
+                // No focusedDisplayID — can't determine display
+                return true
+            }
+        }
+        // Has an enabled shortcut: always reachable
+        if switchTag != nil { return true }
+        // Complex case: delegate to strategizer
+        let tag = Self.switchTag(
+            switchMapEntry: switchTag,
+            spaceNumber: space.spaceNumber)
+        let ctx = SwitchContext(
+            entryPoint: .menu, mode: switchingMode,
+            spaces: spaces,
+            enabledSwitchMap: enabledSwitchMap ?? [:],
+            hasArrowShortcuts: hasArrowShortcuts,
+            focusedDisplayID: focusedDisplayID)
+        let strategy = SwitchStrategizer.resolveStrategy(
+            switchTag: tag, context: ctx)
+        return strategy != .unreachable
+    }
+
+    /// The tag to pass to the switch handler for this space.
+    /// Positive for regular desktops, negative (-(spaceNumber)) for fullscreen/unswitchable.
+    static func switchTag(switchMapEntry: Int?, spaceNumber: Int) -> Int {
+        if let tag = switchMapEntry, tag > 0 { return tag }
+        return -(spaceNumber)
     }
 }

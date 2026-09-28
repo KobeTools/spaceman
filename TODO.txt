@@ -1,116 +1,97 @@
 
-================================================================================
-OPTION-HOVER: show extra info on the menu bar icon
-================================================================================
+============================================================================
+REFACTORING
+============================================================================
 
-Status:   PARKED (2026-03-25)
-Effort:   Low — isolated change, entirely within StatusBar.swift
-Risk:     None — additive, no architectural impact, easy to remove
+StatusBar is large (~1000 lines) and handles menu construction, click handling,
+scroll handling, tooltips, quick rename panels, Sparkle updates, shortcut display,
+and grid vs list switching. It's doing a lot.  Split or extract from StatusBar
+(quick rename, menu construction, scroll handling could be separate).
 
-Why parked: The itch that prompted this isn't strong right now. The mechanism
-is simple enough to add whenever it's needed, and the "what to show" decision
-doesn't need to be made upfront.
+============================================================================
+SLANTED ICON SHAPES: triangles and trapezoids
+============================================================================
 
---- What it does ---
-
-When the user hovers over the menu bar icon while holding Option, show
-additional detail about the spaces.
-
---- What to show (candidates) ---
-
-  a) Space numbers and/or names — for users who use compact/number styles and
-     occasionally want to see which space is which without opening the menu.
-     Easiest.
-
-  b) Space screenshots — tiny thumbnails of each space's content. Much cooler
-     but much harder: needs CGWindowListCreateImage, Screen Recording
-     permission, and image rendering. Different league of effort.
-
-  c) Other ideas considered: focused app per space.
-
---- How to present it (candidates) ---
-
-  a) Tooltip — simplest. Just set statusBarItem.button.toolTip to a string.
-     Plain text only, no formatting control. Only works for (a) above.
-
-  b) NSPopover — speech balloon like the help popovers in Preferences (which
-     use SwiftUI .popover). The menu bar icon is AppKit, so this would use
-     NSPopover with an NSHostingView to embed SwiftUI content. More effort
-     but can show rich/formatted content, and the pattern already exists in
-     the codebase (PreferencesView.swift:262, :421). Works for all options.
-
---- Hover detection (common to all approaches) ---
-
-All in StatusBar.swift (~15-20 lines):
-
-  1. NSTrackingArea on statusBarItem.button for mouseEntered/mouseExited
-  2. On mouseEntered: check NSEvent.modifierFlags.contains(.option)
-  3. If Option held → show the detail (tooltip or popover)
-  4. On mouseExited → hide it
-
-  let area = NSTrackingArea(
-      rect: button.bounds,
-      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-      owner: self
-  )
-  button.addTrackingArea(area)
-
-  Notes:
-  - .activeAlways works even when the app isn't frontmost (menu bar item)
-  - .inVisibleRect auto-updates the rect if the button resizes
-  - mouseEntered/mouseExited go to the owner (StatusBar inherits from NSObject)
-
---- Future-proofing ---
-
-No concerns. The tracking area + event monitor pattern is standard AppKit.
-If more modifier-based behaviors are added later (Cmd-hover, etc.), the
-flag-checking can be refactored trivially at that point.
-
-================================================================================
-RIGHT-CLICK DEAD ZONE: top 1-2px of menu bar icon
-================================================================================
-
-Status:   PARKED (2026-03-28)
-Effort:   Low-Medium — NSEvent monitor + coordinate check
-Risk:     Low — additive, but must avoid double-triggering with normal clicks
+Status:   IDEA (2026-04-03)
+Effort:   Medium — custom NSBezierPath rendering, hit testing changes
+Risk:     Low — additive, new icon shape option alongside existing ones
 
 --- What it is ---
 
-Commit c410b92 fixed left-clicks in the 1-2px gap above/below the menu bar
-button by using NSEvent.mouseLocation instead of event.locationInWindow.
-Right-clicks in that gap are NOT fixed: the button's sendAction(on:) never
-fires because the click lands outside the NSStatusBarButton's hit area, so
-handleClick() is never called.
+A new decoration shape where icons have slanted/diagonal edges instead of
+vertical ones. With short text (numbers), icons become triangles. With longer
+text (names), they become trapezoids. The slant creates a distinctive,
+dynamic look.
 
---- Why it matters ---
+Numbers (triangles), without or with gaps:
 
-Fitts's law: the topmost pixel of the screen is "infinitely tall" because the
-cursor stops at the screen edge. Right-clicking the menu bar icon by slamming
-the cursor to the top of the screen almost always lands in the 1-2px gap,
-not on the button. This is the most natural way to right-click a menu bar
-item, and it silently does nothing.
+      _______                   . _____ .    
+     / \ 5 / \       or        / \\ 5 // \   
+    / 4 \ / 6 \               / 4 \\ // 6 \  
+    ‾‾‾‾‾‾‾‾‾‾‾               ‾‾‾‾‾ ' ‾‾‾‾‾  
 
---- Approach ---
+Names (trapezoids) without or with gaps:
 
-Add an NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) that:
+      ___________________                  ____ ________ _______   
+     /    \ Five /       \      or        /    \\ Five //       \  
+    / Four \    / Private \              / Four \\    // Private \ 
+    ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾              ‾‾‾‾‾‾‾‾ ‾‾‾‾ ‾‾‾‾‾‾‾‾‾‾‾ 
 
-  1. Checks if the click is within the status bar item's screen frame
-     (statusBarItem.button.window.convertToScreen(button.frame))
-  2. If so, shows the popup menu manually (same code as the existing
-     right-click path in handleClick)
-  3. Returns nil to consume the event (prevents double-triggering)
+Icons can tessellate (share slanted edges) or have gaps between them, like
+the existing rectangular icons do.
 
-The monitor must coexist with the button's own sendAction — when the click
-lands on the button proper, the button handles it and the monitor should
-not interfere. A simple approach: always handle right-clicks via the monitor
-and remove .rightMouseDown from sendAction(on:). This avoids any
-double-trigger logic.
+--- Rendering ---
 
---- Why parked ---
+NSBezierPath can draw arbitrary polygons, so the shape itself is
+straightforward — just a trapezoid/triangle path instead of the current
+NSBezierPath(roundedRect:). Would be a new case in IconStyle or IconShape.
 
-The impact is real but narrow. Users who right-click precisely (cursor
-already near the menu bar) are unaffected. Only the "slam to top edge"
-gesture fails. Left-clicks (the primary interaction) already work in the
-gap.
+For each icon, the path would be:
+  - Top edge: shorter than bottom (or equal for rectangles)
+  - Left edge: slanted inward from bottom-left to top-left
+  - Right edge: slanted inward from bottom-right to top-right
+  - The slant angle is constant; the top width depends on the text width
 
-================================================================================
+Text is centered within the shape. For trapezoids this is approximately
+the center of the bounding rect; for narrow triangles the text sits in
+the wider bottom portion.
+
+--- Considerations ---
+
+1. Hit testing: IconWidth currently uses rectangular left/right bounds.
+   Slanted edges mean the actual clickable shape is a trapezoid. Two
+   approaches:
+     a) Keep rectangular hit zones (simpler, small visual mismatch at edges)
+     b) Add diagonal hit testing (more accurate, more code)
+   Option (a) is probably fine — the mismatch is 1-2px at the slant.
+
+2. Interlocking vs gaps: The shapes can tessellate (each icon's right slant
+   is the next icon's left slant) or have gaps. Gaps are simpler since icons
+   remain independently rendered. Tessellation requires either rendering the
+   whole strip as one composite path or handling overlap between adjacent
+   icon images.
+
+3. Two-row mode: Slanted shapes in two rows could alternate the slant
+   direction per row (top row: /‾\, bottom row: \_/) for a zig-zag effect.
+   Or both rows could slant the same way. Needs visual experimentation.
+   Or this shape could be unavailable in two-row mode.
+
+4. Active/inactive distinction: The existing fill/border distinction works
+   naturally with trapezoid paths — filled trapezoids vs bordered trapezoids.
+
+5. Fullscreen variant: Could use inverted slant (wider at top instead of
+   bottom) as the contrasting shape, analogous to how rectangular↔pill works
+   currently.
+
+--- Implementation sketch ---
+
+  - Add a new IconShape case (e.g. .slanted) or a separate slant parameter
+  - In renderIcon(), when slanted: build an NSBezierPath with 4 points
+    instead of using roundedRect
+  - The slant inset = some fraction of the icon height (e.g. height * 0.3)
+  - Top-left = (slantInset, height), top-right = (width - slantInset, height)
+  - Bottom-left = (0, 0), bottom-right = (width, 0)
+  - For bordered: stroke the path. For filled: fill the path
+  - Text drawing unchanged (centered in bounding rect, close enough)
+
+============================================================================

@@ -28,8 +28,12 @@ class SpaceObserver {
     private let workspace = NSWorkspace.shared
     private let conn = _CGSDefaultConnection()
     private let defaults = UserDefaults.standard
-    private let nameStore = SpaceNameStore.shared
+    let nameStore: SpaceNameStore
     private let workerQueue = DispatchQueue(label: "dev.ruittenb.Spaceman.SpaceObserver")
+
+    /// Test injection point. When non-nil, `fetchDisplaySpaces()` returns this
+    /// instead of calling the private CG API.
+    var displaySpacesProvider: (() -> [NSDictionary]?)?
 
     /// When true, the next update uses position-based matching to handle ID reassignment after reboot/wake.
     /// Starts true so the first update after app launch uses position matching.
@@ -46,16 +50,22 @@ class SpaceObserver {
 
     weak var delegate: SpaceObserverDelegate?
 
-    init() {
+    init(nameStore: SpaceNameStore = .shared) {
+        self.nameStore = nameStore
         workspace.notificationCenter.addObserver(
             self,
-            selector: #selector(updateSpaceInformation),
+            selector: #selector(handleSpaceSwitch),
             name: NSWorkspace.activeSpaceDidChangeNotification,
             object: workspace)
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(updateSpaceInformation),
-            name: NSNotification.Name("ButtonPressed"),
+            selector: #selector(handleUserRefresh),
+            name: settingsChangedName,
+            object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAutoRefresh),
+            name: autoRefreshTriggeredName,
             object: nil)
         workspace.notificationCenter.addObserver(
             self,
@@ -67,6 +77,28 @@ class SpaceObserver {
             selector: #selector(handleScreenChange),
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil)
+        workspace.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleSessionActive),
+            name: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: workspace)
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleSessionActive),
+            name: NSNotification.Name("com.apple.screenIsUnlocked"),
+            object: nil)
+    }
+
+    @objc private func handleSpaceSwitch() {
+        updateSpaceInformation(trigger: .spaceSwitch)
+    }
+
+    @objc private func handleUserRefresh() {
+        updateSpaceInformation(trigger: .userRefresh)
+    }
+
+    @objc private func handleAutoRefresh() {
+        updateSpaceInformation(trigger: .autoRefresh)
     }
 
     @objc private func handleWake() {
@@ -74,22 +106,27 @@ class SpaceObserver {
     }
 
     @objc private func handleScreenChange() {
-        updateSpaceInformation()
+        updateSpaceInformation(trigger: .topologyChange)
+    }
+
+    @objc private func handleSessionActive() {
+        updateSpaceInformation(trigger: .sessionActive)
     }
 
     // Compare two displays according to user preferences
     func compareDisplays(
-        d1: NSDictionary, d2: NSDictionary,
+        display1: NSDictionary, display2: NSDictionary,
         verticalDirection: VerticalDirection,
         horizontalDirection: HorizontalDirection
     ) -> Bool {
-        let c1 = DisplayGeometryUtilities.getDisplayCenter(display: d1)
-        let c2 = DisplayGeometryUtilities.getDisplayCenter(display: d2)
-        let isVerticallyArranged = DisplayGeometryUtilities.getIsVerticallyArranged(d1: d1, d2: d2)
+        let center1 = DisplayGeometryUtilities.getDisplayCenter(display: display1)
+        let center2 = DisplayGeometryUtilities.getDisplayCenter(display: display2)
+        let isVerticallyArranged = DisplayGeometryUtilities.getIsVerticallyArranged(
+            display1: display1, display2: display2)
 
         return SpaceObserver.compareDisplayCenters(
-            c1: c1,
-            c2: c2,
+            center1: center1,
+            center2: center2,
             isVerticallyArranged: isVerticallyArranged,
             verticalDirection: verticalDirection,
             horizontalDirection: horizontalDirection
@@ -98,8 +135,8 @@ class SpaceObserver {
 
     // Compare two display centers according to user preferences (testable static method)
     static func compareDisplayCenters(
-        c1: CGPoint,
-        c2: CGPoint,
+        center1: CGPoint,
+        center2: CGPoint,
         isVerticallyArranged: Bool,
         verticalDirection: VerticalDirection,
         horizontalDirection: HorizontalDirection
@@ -111,28 +148,32 @@ class SpaceObserver {
             switch verticalDirection {
             case .defaultOrder:
                 // macOS default: left-to-right by X coordinate
-                return c1.x < c2.x
+                return center1.x < center2.x
             case .topGoesFirst:
                 // Top to bottom: higher Y goes first
-                return c1.y > c2.y
+                return center1.y > center2.y
             case .bottomGoesFirst:
                 // Bottom to top: lower Y goes first
-                return c1.y < c2.y
+                return center1.y < center2.y
             }
         } else {
             // Side-by-side displays: use horizontalDirection setting
             switch horizontalDirection {
             case .defaultOrder:
                 // Left to right
-                return c1.x < c2.x
+                return center1.x < center2.x
             case .reverseOrder:
                 // Right to left
-                return c1.x > c2.x
+                return center1.x > center2.x
             }
         }
     }
 
     @objc public func updateSpaceInformation() {
+        updateSpaceInformation(trigger: .userRefresh)
+    }
+
+    public func updateSpaceInformation(trigger: SpaceUpdateTrigger) {
         let restartNumberingByDisplay = defaults.bool(forKey: "restartNumberingByDisplay")
         let horizontalDirection = HorizontalDirection(
             rawValue: defaults.integer(forKey: "horizontalDirection")) ?? .defaultOrder
@@ -145,7 +186,8 @@ class SpaceObserver {
                 restartNumberingByDisplay: restartNumberingByDisplay,
                 horizontalDirection: horizontalDirection,
                 verticalDirection: verticalDirection,
-                needsRevalidation: needsRevalidation)
+                needsRevalidation: needsRevalidation,
+                trigger: trigger)
         }
     }
 
@@ -153,22 +195,23 @@ class SpaceObserver {
         restartNumberingByDisplay: Bool,
         horizontalDirection: HorizontalDirection,
         verticalDirection: VerticalDirection,
-        needsRevalidation: Bool
+        needsRevalidation: Bool,
+        trigger: SpaceUpdateTrigger = .userRefresh
     ) {
         guard var displays = fetchDisplaySpaces() else { return }
 
         // Sort displays based on user preference (incorporating display ordering feature)
         displays.sort { a, b in
             compareDisplays(
-                d1: a, d2: b,
+                display1: a, display2: b,
                 verticalDirection: verticalDirection,
                 horizontalDirection: horizontalDirection)
         }
 
         // Map sorted display to index (1..D)
         var currentDisplayIndexByID: [String: Int] = [:]
-        for (idx, d) in displays.enumerated() {
-            if let displayID = d["Display Identifier"] as? String {
+        for (idx, display) in displays.enumerated() {
+            if let displayID = display["Display Identifier"] as? String {
                 currentDisplayIndexByID[displayID] = idx + 1
             }
         }
@@ -195,6 +238,8 @@ class SpaceObserver {
         // Build space number map AFTER sorting to ensure numbering matches display order
         let spaceNumberMap = buildSpaceNumberMap(from: displays)
 
+        // TOCTOU: a rename between this loadAll() and save() below would be overwritten.
+        // The window is tiny (ms) so this is acceptable; fixing it requires holding a write lock throughout.
         let storedNames = nameStore.loadAll()
 
         // Determine which stored display UUIDs have entries
@@ -203,12 +248,13 @@ class SpaceObserver {
         var updatedNames: [String: SpaceNameInfo] = [:]
         var activeSpaceID = -1
         var lastSpaceByDesktopNumber = 0
+        var lastFullScreenNumber = 0
         var collectedSpaces: [Space] = []
 
-        for d in displays {
-            guard let currentSpaces = d["Current Space"] as? [String: Any],
-                  let spaces = d["Spaces"] as? [[String: Any]],
-                  let displayID = d["Display Identifier"] as? String
+        for display in displays {
+            guard let currentSpaces = display["Current Space"] as? [String: Any],
+                  let spaces = display["Spaces"] as? [[String: Any]],
+                  let displayID = display["Display Identifier"] as? String
             else {
                 continue
             }
@@ -232,9 +278,8 @@ class SpaceObserver {
 
             if restartNumberingByDisplay {
                 lastSpaceByDesktopNumber = 0
+                lastFullScreenNumber = 0
             }
-
-            var lastFullScreenSpaceNumber = 0
             var positionOnThisDisplay = 0
             let currentSpaceID = currentSpaces["ManagedSpaceID"] as? Int ?? -1
             if currentSpaceID != -1 && activeSpaceID == -1 {
@@ -251,13 +296,13 @@ class SpaceObserver {
 
                 positionOnThisDisplay += 1
 
-                let spaceByDesktopID: String
+                let spaceLabel: String
                 if isFullScreen {
-                    lastFullScreenSpaceNumber += 1
-                    spaceByDesktopID = "F\(lastFullScreenSpaceNumber)"
+                    lastFullScreenNumber += 1
+                    spaceLabel = "F\(lastFullScreenNumber)"
                 } else {
                     lastSpaceByDesktopNumber += 1
-                    spaceByDesktopID = String(lastSpaceByDesktopNumber)
+                    spaceLabel = String(lastSpaceByDesktopNumber)
                 }
 
                 let savedInfo = SpaceObserver.resolveSpaceNameInfo(
@@ -270,7 +315,7 @@ class SpaceObserver {
                 let savedName = savedInfo?.spaceName
                 let resolvedName = resolveSpaceName(
                     from: savedName,
-                    spaceNumber: spaceNumber,
+                    spaceLabel: spaceLabel,
                     isFullScreen: isFullScreen,
                     spaceDict: spaceDict)
 
@@ -279,7 +324,7 @@ class SpaceObserver {
                     spaceID: managedSpaceID,
                     spaceName: resolvedName,
                     spaceNumber: spaceNumber,
-                    spaceByDesktopID: spaceByDesktopID,
+                    spaceLabel: spaceLabel,
                     isCurrentSpace: isCurrentSpace,
                     isFullScreen: isFullScreen,
                     colorHex: savedInfo?.colorHex)
@@ -295,7 +340,7 @@ class SpaceObserver {
                 var nameInfo = SpaceNameInfo(
                     spaceNum: spaceNumber,
                     spaceName: resolvedName,
-                    spaceByDesktopID: spaceByDesktopID)
+                    spaceLabel: spaceLabel)
 
                 // During topology changes, if we found the entry by ID matching,
                 // preserve its stored display/position. The current position is
@@ -331,11 +376,14 @@ class SpaceObserver {
         }
 
         DispatchQueue.main.async {
-            self.delegate?.didUpdateSpaces(spaces: collectedSpaces)
+            self.delegate?.didUpdateSpaces(spaces: collectedSpaces, trigger: trigger)
         }
     }
 
     private func fetchDisplaySpaces() -> [NSDictionary]? {
+        if let provider = displaySpacesProvider {
+            return provider()
+        }
         guard let rawDisplays = CGSCopyManagedDisplaySpaces(conn)?.takeRetainedValue() as? [NSDictionary] else {
             return nil
         }
@@ -448,7 +496,7 @@ class SpaceObserver {
 
     private func resolveSpaceName(
         from savedName: String?,
-        spaceNumber: Int,
+        spaceLabel: String,
         isFullScreen: Bool,
         spaceDict: [String: Any]
     ) -> String {
@@ -459,14 +507,17 @@ class SpaceObserver {
             if let pid = spaceDict["pid"] as? pid_t,
                let app = NSRunningApplication(processIdentifier: pid),
                let name = app.localizedName {
-                return name.uppercased()
+                return name.capitalized
             }
             return "FULL"
+        }
+        if savedName == nil {
+            return "---"
         }
         return ""
     }
 }
 
 protocol SpaceObserverDelegate: AnyObject {
-    func didUpdateSpaces(spaces: [Space])
+    func didUpdateSpaces(spaces: [Space], trigger: SpaceUpdateTrigger)
 }

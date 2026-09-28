@@ -1,4 +1,6 @@
 
+SHELL    = /bin/bash
+
 PROJECT  = Spaceman
 APPNAME  = $(PROJECT).app
 BUILDDIR = build
@@ -11,7 +13,7 @@ IMAGE    = $(BUILDDIR)/$(PROJECT)-$(VERSION).dmg
 RCDIR    = ~/.spaceman
 AUTHOR   = ruittenb
 DOMAIN   = dev.$(AUTHOR).$(PROJECT)
-BREWDIR := $(shell brew --repo $(AUTHOR)/tap)
+BREWDIR  = $(shell brew --repo $(AUTHOR)/tap)
 DATE    := $(shell date +"%Y-%m-%dT%H:%M:%S%z")
 
 .DEFAULT_GOAL := help
@@ -20,32 +22,42 @@ DATE    := $(shell date +"%Y-%m-%dT%H:%M:%S%z")
 help: ## Print help for each target
 	@awk -v tab=17 'BEGIN{FS="(:.*## |##@ |@## )";c="\033[36m";m="\033[0m";y="  ";a=2;h()}function t(s){gsub(/[ \t]+$$/,"",s);gsub(/^[ \t]+/,"",s);return s}function u(g,d){split(t(g),f," ");for(j in f)printf"%s%s%-"tab"s%s%s\n",y,c,t(f[j]),m,d}function h(){printf"\nUsage:\n%smake %s<target>%s\n\nRecognized targets:\n",y,c,m}/\\$$/{gsub(/\\$$/,"");b=b$$0;next}b{$$0=b$$0;b=""}/^[-a-zA-Z0-9*\/%_. ]+:.*## /{p=sprintf("\n%"(tab+a)"s"y,"");gsub(/\\n/,p);if($$1~/%/&&$$2~/^%:/){n=split($$2,q,/%:|:% */);for(i=2;i<n;i+=2){g=$$1;sub(/%/,q[i],g);u(g,q[i+1])}}else if($$1~/%/&&$$2~/%:[^%]+:[^%]+:%/){d=$$2;sub(/^.*%:/,"",d);sub(/:%.*/,"",d);n=split(d,q,/:/);for(i=1;i<=n;i++){g=$$1;d=$$2;sub(/%/,q[i],g);sub(/%:[^%]+:%/,q[i],d);u(g,d)}}else u($$1,$$2)}/^##@ /{gsub(/\\n/,"\n");if(NF==3)tab=$$2;printf"\n%s\n",$$NF}END{print""}' $(MAKEFILE_LIST) # v1.62
 
+.PHONY: translations
+translations: ## Update and complete all translations
+	claude -p "Bring the .xcstrings file up to date, if necessary. Use the skill file .claude/skills/translations.md"
+
 .PHONY: test
 test: ## Run unit tests
-	xcodebuild test -project Spaceman.xcodeproj -scheme Spaceman -destination platform=macOS | xcbeautify
+	set -o pipefail && \
+		xcodebuild test -project $(PROJECT).xcodeproj -scheme $(PROJECT) -destination platform=macOS | \
+		xcbeautify --quiet
 
 .PHONY: lint
 lint: ## Check source code style
-	swiftlint Spaceman
+	swiftlint lint Spaceman --no-cache
 
 .PHONY: build
-build: ## Make the archive file
-	$(MAKE) $(ARCHIVE)
+build: $(ARCHIVE) ## Make the archive file
 
 $(ARCHIVE): $(PBXPROJ)
-	xcodebuild -workspace $(PROJECT).xcodeproj/project.xcworkspace -scheme $(PROJECT) -configuration Release clean archive -archivePath $(ARCHIVE) | xcbeautify
+	set -o pipefail && \
+		xcodebuild -project $(PROJECT).xcodeproj -scheme $(PROJECT) -configuration Release clean archive -archivePath $(ARCHIVE) | \
+		xcbeautify
+
+.PHONY: run
+run: ## Start the most recently compiled application bundle
+	open ~/Library/Developer/Xcode/DerivedData/$(PROJECT)-*/Build/Products/Debug/$(PROJECT).app || \
+		open /Applications/$(PROJECT).app
 
 .PHONY: export
-export: ## Make the app file
-	$(MAKE) $(APPFILE)
+export: $(APPFILE) ## Make the app file
 
 $(APPFILE): $(ARCHIVE)
 	xcodebuild -exportArchive -archivePath $(ARCHIVE) -exportOptionsPlist $(PROJECT)/exportOptions.plist -exportPath $(IMAGEDIR)
 	@test -d "$(APPFILE)" || { echo $$'\nExport failed: "$(APPFILE)" not found. Check code signing or exportOptions.plist.'; exit 1; }
 
 .PHONY: image
-image: ## Make the dmg image file
-	$(MAKE) $(IMAGE)
+image: $(IMAGE) ## Make the dmg image file
 
 $(IMAGE): $(APPFILE)
 	create-dmg \
@@ -63,6 +75,7 @@ $(IMAGE): $(APPFILE)
 		$(IMAGE)                                                    \
 		$(IMAGEDIR) # source folder
 
+.PHONY: all
 all: image ## Make all of the above
 
 
@@ -103,7 +116,7 @@ publish-force: ## Publish the main branch appcast on Github Pages (force push)
 brew-update: ## Update the spaceman.rb file with the correct version
 	@cd $(BREWDIR)/Casks &&                                                 \
 	awk -v version=$(VERSION) -v shaout="$(shell shasum -a 256 $(IMAGE))" ' \
-	/version "[0-9.]*"/ {                                                   \
+	/version "[-0-9.alph]*"/ {                                              \
 		print "  version \"" version "\""; next                             \
 	}                                                                       \
 	/sha256/ {                                                              \
@@ -121,11 +134,27 @@ brew-publish: ## Publish the new spaceman.rb so that homebrew can find it
 	git commit Casks -m "Version $(VERSION)" && \
 	git push
 
+
+##@ Continuous Integration:
+
+.PHONY: test-ci
+test-ci: ## Run unit tests (on GitHub)
+	set -o pipefail && \
+		xcodebuild test -project $(PROJECT).xcodeproj -scheme $(PROJECT) -destination platform=macOS \
+			CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | \
+		xcbeautify --quiet
+
+.PHONY: lint-ci
+lint-ci: ## Check source code style (on GitHub)
+	swiftlint lint Spaceman --reporter github-actions-logging --no-cache
+
+
 ##@ Documentation:
 
 .PHONY: setup-pillow
 setup-pillow: ## Install Pillow, requirement for scripts/add-background.py
 	pip3 install Pillow
+
 
 ##@ Defaults:
 

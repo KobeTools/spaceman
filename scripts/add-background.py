@@ -2,8 +2,8 @@
 """
 Description : Composite a window screenshot (containing transparent borders) over a
               mirrored/rotated version of a background image (images/_background.png).
-              Produces <name>-bg.png next to the input file.
-Usage       : python3 scripts/add-background.py images/Preferences-General.png
+              Renames the original to <name>-nobg.png and saves the result as <name>.png.
+Usage       : python3 scripts/add-background.py images/Preferences-General.png [more files...]
 Requires    : Pillow (pip3 install Pillow)
 """
 
@@ -45,37 +45,44 @@ def cover_crop(bg: Image.Image, target_w: int, target_h: int) -> Image.Image:
     return bg.crop((left, top, left + target_w, top + target_h))
 
 
-def output_path(input_path: Path) -> Path:
-    """Build output path, stripping existing -bg suffix to avoid foo-bg-bg.png."""
+def nobg_path(input_path: Path) -> Path:
+    """Build the -nobg backup path for the original file."""
     stem = input_path.stem
-    if stem.endswith("-bg"):
-        stem = stem[:-3]
-    return input_path.with_name(f"{stem}-bg.png")
+    if stem.endswith("-nobg"):
+        return input_path
+    return input_path.with_name(f"{stem}-nobg.png")
 
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        sys.exit(f"Usage: {sys.argv[0]} <screenshot.png>")
-
-    input_path = Path(sys.argv[1])
+def process_file(input_path: Path, bg_path: Path) -> None:
     if not input_path.exists():
-        sys.exit(f"Input file not found: {input_path}")
+        print(f"Input file not found: {input_path}", file=sys.stderr)
+        return
 
     screenshot = Image.open(input_path).convert("RGBA")
-    bg = Image.open(find_background()).convert("RGBA")
+    bg = Image.open(bg_path).convert("RGBA")
 
     bg = random_transform(bg)
     bg = cover_crop(bg, screenshot.width, screenshot.height)
 
-    bg.paste(screenshot, (0, 0), screenshot)
+    bg = Image.alpha_composite(bg, screenshot)
 
     result_w = round(bg.width * 0.67)
     result_h = round(bg.height * 0.67)
     bg = bg.resize((result_w, result_h), Image.LANCZOS)
 
-    out = output_path(input_path)
-    bg.save(out, "PNG")
-    print(f"Saved: {out}")
+    backup = nobg_path(input_path)
+    input_path.rename(backup)
+    bg.save(input_path, "PNG")
+    print(f"Saved: {input_path}  (original → {backup.name})")
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        sys.exit(f"Usage: {sys.argv[0]} <screenshot.png> [more files...]")
+
+    bg_path = find_background()
+    for arg in sys.argv[1:]:
+        process_file(Path(arg), bg_path)
 
 
 if __name__ == "__main__":

@@ -11,214 +11,137 @@ import LaunchAtLogin
 import SwiftUI
 
 struct PreferencesView: View {
+    private let subItemIndent: CGFloat = 20
+    @ObservedObject var tabState: PreferencesTabState
+    var onCheckForUpdates: (() -> Void)?
 
-    weak var parentWindow: PreferencesWindow?
-
-    @AppStorage("displayStyle") private var displayStyle = IconText.numbers
+    @AppStorage("iconText") private var iconText = IconText.numbers
     @AppStorage("decorationActive") private var decorationActive = IconStyle.filledRounded
     @AppStorage("decorationInactive") private var decorationInactive = IconStyle.borderedRounded
     @AppStorage("useVariableWidth") private var useVariableWidth = false
+    @AppStorage("fontDesign") private var fontDesign = FontDesign.monospaced
     @AppStorage("autoRefreshSpaces") private var autoRefreshSpaces = false
-    @AppStorage("layoutMode") private var layoutMode = LayoutMode.medium
-    @AppStorage("visibleSpacesMode") private var visibleSpacesModeRaw: Int = VisibleSpacesMode.all.rawValue
+    @AppStorage("autoShrink") private var autoShrink = true
+    @AppStorage("iconSize") private var iconSize = IconSize.medium
+    @AppStorage("rowLayout") private var rowLayout = RowLayout.singleRow
+    @AppStorage("showMissionControl") private var showMissionControl = false
+    @AppStorage("showNavArrows") private var showNavArrows = false
+    @AppStorage("showHUD") private var showHUD = false
+    @AppStorage("hudAlwaysTransparent") private var hudAlwaysTransparent = false
+
+    @AppStorage("visibleSpacesMode") private var visibleSpacesMode = VisibleSpacesMode.all
     @AppStorage("neighborRadius") private var neighborRadius = 1
-    @AppStorage("hideFullscreenSpaces") private var hideFullscreenSpaces = false
+    @AppStorage("showFullscreenSpaces") private var showFullscreenSpaces = true
     @AppStorage("restartNumberingByDisplay") private var restartNumberingByDisplay = false
     @AppStorage("horizontalDirection") private var horizontalDirection = HorizontalDirection.defaultOrder
-    @AppStorage("dualRowFillOrder") private var dualRowFillOrder = DualRowFillOrder.byColumn
     @AppStorage("verticalDirection") private var verticalDirection = VerticalDirection.bottomGoesFirst
-    @AppStorage("schema") private var keySet = KeySet.toprow
-    @AppStorage("withShift") private var withShift = false
-    @AppStorage("withControl") private var withControl = false
-    @AppStorage("withOption") private var withOption = false
-    @AppStorage("withCommand") private var withCommand = false
-
-    private var visibleSpacesMode: VisibleSpacesMode {
-        get { VisibleSpacesMode(rawValue: visibleSpacesModeRaw) ?? .all }
-        set { visibleSpacesModeRaw = newValue.rawValue }
-    }
+    @AppStorage("mainDisplayOnly") private var mainDisplayOnly = false
 
     @StateObject private var prefsVM = PreferencesViewModel()
-    @State private var selectedTab = 0
     @State private var showDisplaysHelp = false
     @State private var showSwitchingHelp = false
+    @State private var showAutoShrinkHelp = false
 
     // MARK: - Main Body
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
-                closeButton
-                appInfo
+        preferencePanes
+            .onAppear(perform: prefsVM.loadData)
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSNotification.Name("ActiveSpacesChanged"))
+            ) { _ in
+                prefsVM.loadData()
             }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .frame(height: 60)
-            .offset(y: 1) // Looked like it was off center
-
-            Divider()
-
-            preferencePanes
-        }
-        .ignoresSafeArea()
-        .frame(maxWidth: .infinity, alignment: .top)
-        .onAppear(perform: prefsVM.loadData)
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ActiveSpacesChanged"))) { _ in
-            prefsVM.loadData()
-        }
-    }
-
-    // MARK: - Close Button
-    private var closeButton: some View {
-        VStack {
-            Spacer()
-            HStack {
-                if let parentWindow = parentWindow {
-                    Button {
-                        parentWindow.close()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(BorderlessButtonStyle())
-                    .keyboardShortcut("w", modifiers: .command)
-                    .help("Close window (⌘W)")
-                    .padding(.leading, 12)
-                }
-                Spacer()
-            }
-            Spacer()
-        }
-    }
-
-    // MARK: - App Info
-    private var appInfo: some View {
-        HStack(spacing: 8) {
-            HStack {
-                Image(nsImage: NSImage(named: "AppIcon") ?? NSImage())
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 40, height: 40)
-                VStack(alignment: .leading) {
-                    Text("Spaceman").font(.headline)
-                    Text("Version \(Constants.AppInfo.appVersion ?? "?")")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .padding(.leading)
-
-            Spacer()
-
-            HStack {
-                Button {
-                    NSWorkspace.shared.open(Constants.AppInfo.repo)
-                } label: {
-                    Text("GitHub").font(.system(size: 12))
-                }
-                .buttonStyle(LinkButtonStyle())
-                .onHover { hovering in
-                    if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                }
-
-                Button {
-                    NSWorkspace.shared.open(Constants.AppInfo.website)
-                } label: {
-                    Text("Website").font(.system(size: 12))
-                }
-                .buttonStyle(LinkButtonStyle())
-                .onHover { hovering in
-                    if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                }
-            }
-        }
-        .padding(.horizontal, 18)
     }
 
     // MARK: - Preference Panes
     private var preferencePanes: some View {
         VStack(spacing: 0) {
-            // Tab selector
-            Picker("", selection: $selectedTab) {
-                Text("General").help("⌘1").tag(0)
-                Text("Appearance").help("⌘2").tag(1)
-                Text("Spaces").help("⌘3").tag(2)
-                Text("Shortcuts").help("⌘4").tag(3)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .padding(10)
-            .background(
-                Group {
-                    Button("") { selectedTab = 0 }
-                        .keyboardShortcut("1", modifiers: .command)
-                        .hidden()
-                    Button("") { selectedTab = 1 }
-                        .keyboardShortcut("2", modifiers: .command)
-                        .hidden()
-                    Button("") { selectedTab = 2 }
-                        .keyboardShortcut("3", modifiers: .command)
-                        .hidden()
-                    Button("") { selectedTab = 3 }
-                        .keyboardShortcut("4", modifiers: .command)
-                        .hidden()
-                }
-            )
-
-            Divider()
-
             // Tab content
             Group {
-                if selectedTab == 0 {
+                if tabState.selectedTab == 0 {
                     VStack(alignment: .leading, spacing: 0) {
                         generalPane
                         Divider()
-                        displaysPane
+                            .padding(.horizontal)
+                        menuPane
                         Divider()
+                            .padding(.horizontal)
                         backupRestorePane
                     }
-                } else if selectedTab == 1 {
+                } else if tabState.selectedTab == 1 {
                     appearancePane
-                } else if selectedTab == 2 {
+                } else if tabState.selectedTab == 2 {
                     spacesPane
+                } else if tabState.selectedTab == 3 {
+                    switchingPane
+                } else if tabState.selectedTab == 4 {
+                    displaysPane
                 } else {
-                    VStack(alignment: .leading, spacing: 0) {
-                        shortcutsPane
-                        Divider()
-                        switchingPane
-                    }
+                    aboutPane
                 }
             }
         }
+        .frame(minWidth: 425)
         .padding(.bottom, 20)
+        .background(
+            Group {
+                Button("") { tabState.selectedTab = 0 }
+                    .keyboardShortcut("1", modifiers: .command)
+                    .hidden()
+                Button("") { tabState.selectedTab = 1 }
+                    .keyboardShortcut("2", modifiers: .command)
+                    .hidden()
+                Button("") { tabState.selectedTab = 2 }
+                    .keyboardShortcut("3", modifiers: .command)
+                    .hidden()
+                Button("") { tabState.selectedTab = 3 }
+                    .keyboardShortcut("4", modifiers: .command)
+                    .hidden()
+                Button("") { tabState.selectedTab = 4 }
+                    .keyboardShortcut("5", modifiers: .command)
+                    .hidden()
+                Button("") { tabState.selectedTab = 5 }
+                    .keyboardShortcut("6", modifiers: .command)
+                    .hidden()
+            }
+        )
+        .onChange(of: tabState.selectedTab) { _ in
+            NotificationCenter.default.post(
+                name: NSNotification.Name("PreferencesTabChanged"),
+                object: nil)
+        }
     }
 
     // MARK: - General pane
     private var generalPane: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 2) {
             Text("General")
                 .font(.title2)
                 .fontWeight(.semibold)
+                .padding(.bottom, 12)
             LaunchAtLogin.Toggle { Text("Launch Spaceman at login") }
+                .padding(.bottom, 8)
             Toggle("Refresh spaces in background", isOn: $autoRefreshSpaces)
+                .padding(.bottom, 6)
+            refreshShortcutRecorder
+            quickRenameShortcutRecorder
+            preferencesShortcutRecorder
         }
         .padding()
-        .onChange(of: autoRefreshSpaces) { enabled in
-            if enabled {
-                prefsVM.startTimer()
-            } else {
-                prefsVM.pauseTimer()
-            }
-        }
     }
 
     // MARK: - Displays pane
     private var displaysPane: some View {
         let hasMultipleDisplays = NSScreen.screens.count > 1
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Displays")
                 .font(.title2)
                 .fontWeight(.semibold)
+                .padding(.bottom, 4)
 
             Toggle("Restart space numbering by display", isOn: $restartNumberingByDisplay)
+                .disabled(!hasMultipleDisplays)
+            Toggle("Show main display only", isOn: $mainDisplayOnly)
                 .disabled(!hasMultipleDisplays)
             HStack(alignment: .top) {
                 Text("When displays are side by side")
@@ -251,7 +174,7 @@ struct PreferencesView: View {
                 Button {
                     openDisplaysSettings()
                 } label: {
-                    Text("Open \(systemSettingsName()) → Displays…")
+                    Text("Open System Settings → Displays…")
                 }
                 Button {
                     showDisplaysHelp.toggle()
@@ -264,7 +187,7 @@ struct PreferencesView: View {
                     Text("""
                         If the display order seems erratic, please pay close \
                         attention to the horizontal alignment in \
-                        \(systemSettingsName()) → Displays → Arrange.
+                        System Settings → Displays → Arrange.
                         """)
                     .padding()
                     .frame(width: 240)
@@ -273,15 +196,84 @@ struct PreferencesView: View {
             .padding(.top)
         }
         .padding()
+        .onChange(of: mainDisplayOnly) { _ in
+            postSettingsChanged()
+        }
         .onChange(of: restartNumberingByDisplay) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+            postSettingsChanged()
         }
         .onChange(of: horizontalDirection) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+            postSettingsChanged()
         }
         .onChange(of: verticalDirection) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+            postSettingsChanged()
         }
+    }
+
+    // MARK: - About pane
+    private var aboutPane: some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(nsImage: NSImage(named: "AppIcon") ?? NSImage())
+                .resizable()
+                .scaledToFit()
+                .frame(width: 96, height: 96)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Spaceman")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Text("Version \(Constants.AppInfo.appVersion ?? "?")")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(verbatim: "© 2020-2023 Sasindu Jayasinghe")
+                    Text(verbatim: "© 2024-2026 René Uittenbogaard")
+                }
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                Button {
+                    onCheckForUpdates?()
+                } label: {
+                    Text("Check for Updates…")
+                }
+                .padding(.top, 4)
+                HStack(spacing: 4) {
+                    Button {
+                        NSWorkspace.shared.open(
+                            Constants.AppInfo.repo)
+                    } label: {
+                        Text("Documentation")
+                            .font(.callout)
+                    }
+                    .buttonStyle(LinkButtonStyle())
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.pointingHand.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    Text("·").font(.callout)
+                        .foregroundColor(.secondary)
+                    Button {
+                        NSWorkspace.shared.open(
+                            Constants.AppInfo.website)
+                    } label: {
+                        Text("Website").font(.callout)
+                    }
+                    .buttonStyle(LinkButtonStyle())
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.pointingHand.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+        .padding(30)
+        .padding(.horizontal)
     }
 
     // MARK: - Backup / Restore pane
@@ -296,7 +288,7 @@ struct PreferencesView: View {
                 }
                 if let message = prefsVM.backupStatusMessage {
                     Text(message)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundColor(prefsVM.backupStatusIsError ? .red : .green)
                 }
             }
@@ -307,15 +299,15 @@ struct PreferencesView: View {
                 .disabled(prefsVM.lastBackupDate == nil)
                 if let message = prefsVM.restoreStatusMessage {
                     Text(message)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundColor(prefsVM.restoreStatusIsError ? .red : .green)
                 } else if let date = prefsVM.lastBackupDate {
                     Text("Last backup: \(date, style: .date) \(date, style: .time)")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
                 } else {
                     Text("No backup found")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
             }
@@ -327,9 +319,31 @@ struct PreferencesView: View {
     // MARK: - Spaces pane
     private var spacesPane: some View {
         VStack(alignment: .leading) {
-            Text("Spaces")
-                .font(.title2)
-                .fontWeight(.semibold)
+            HStack {
+                Text("Spaces")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Spacer()
+                if prefsVM.spaceNamesDict.values.contains(where: { $0.colorHex != nil }) {
+                    HStack(spacing: 4) {
+                        Text("Clear all colors")
+                            .font(.callout)
+                            .foregroundColor(.secondary)
+                        Button {
+                            prefsVM.removeAllColors()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                NotificationCenter.default.post(
+                                    name: settingsChangedName,
+                                    object: nil)
+                            }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+            }
             // The Space names are always shown in the menu, therefore:
             // allow editing even if icon style does not include names
             spaceNameListEditor
@@ -343,86 +357,146 @@ struct PreferencesView: View {
             Text("Appearance")
                 .font(.title2)
                 .fontWeight(.semibold)
-            layoutSizePicker
-            dualRowFillOrderPicker
+            iconSizePicker
+            iconWidthPicker
             spacesStylePicker
+            fontDesignPicker
             activeIconStylePicker
             inactiveIconStylePicker
-            if displayStyle == .noText && decorationActive.isNoDecoration && decorationInactive.isNoDecoration {
+            if iconText == .noText && decorationActive.isNoDecoration && decorationInactive.isNoDecoration {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                     Text("Icons will be invisible with these settings.")
                 }
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundColor(.orange)
                 .frame(maxWidth: .infinity, alignment: .trailing)
+            } else if decorationActive == decorationInactive {
+                Text("Inactive icons will be dimmed for visual distinctness.")
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            iconWidthPicker
+            Divider()
+                .padding(.vertical, 2)
+            rowLayoutPicker
             spacesShownPicker
-            Toggle("Hide fullscreen spaces", isOn: $hideFullscreenSpaces)
-                .padding(.top, 2)
+            Divider()
+                .padding(.vertical, 2)
+            Toggle("Show fullscreen spaces", isOn: $showFullscreenSpaces)
+                .padding(.bottom, 2)
+            Toggle("Show Mission Control button", isOn: $showMissionControl)
+                .padding(.bottom, 2)
+            Toggle("Show navigation arrows", isOn: $showNavArrows)
+                .padding(.bottom, 2)
+            HStack {
+                Toggle("Auto-shrink when there is shortage of space", isOn: $autoShrink)
+                Button {
+                    showAutoShrinkHelp.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showAutoShrinkHelp, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("""
+                            Spaceman will attempt to unshrink the menu bar icon \
+                            when you switch spaces, or trigger a manual refresh.
+                            """)
+                        Text("When switching spaces, the icon may blink briefly.")
+                    }
+                    .padding()
+                    .frame(width: 300)
+                }
+            }
         }
         .padding()
-        .onChange(of: dualRowFillOrder) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+        .onChange(of: autoShrink) { _ in
+            postSettingsChanged()
         }
-        .onChange(of: visibleSpacesModeRaw) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+        .onChange(of: visibleSpacesMode) { _ in
+            postSettingsChanged()
         }
-        .onChange(of: hideFullscreenSpaces) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+        .onChange(of: showFullscreenSpaces) { _ in
+            postSettingsChanged()
+        }
+        .onChange(of: showMissionControl) { _ in
+            postSettingsChanged()
+        }
+        .onChange(of: showNavArrows) { _ in
+            postSettingsChanged()
         }
     }
 
-    // MARK: - Shortcuts pane
-    private var shortcutsPane: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("General")
+    // MARK: - Menu pane
+    @AppStorage("spaceDisplayMode") private var spaceDisplayMode = SpaceDisplayMode.list
+    @AppStorage("gridColumns") private var gridColumns: Int = 3
+
+    private var menuPane: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Menu")
                 .font(.title2)
                 .fontWeight(.semibold)
-            refreshShortcutRecorder
-            preferencesShortcutRecorder
+                .padding(.bottom, 12)
+            HStack {
+                Text("Display spaces in menu as")
+                Spacer()
+                Picker("", selection: $spaceDisplayMode) {
+                    Text("List").tag(SpaceDisplayMode.list)
+                    Text("Grid").tag(SpaceDisplayMode.grid)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+            .padding(.bottom, 8)
+            HStack {
+                Text("Nr. of columns in grid")
+                    .foregroundColor(spaceDisplayMode == .grid ? .primary : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Slider(value: Binding(
+                    get: { Double(gridColumns) },
+                    set: { gridColumns = max(1, Int($0)) }
+                ), in: 1...Double(max(2, prefsVM.spaceNamesDict.count)), step: 1)
+                    .disabled(spaceDisplayMode != .grid)
+                    .padding(.horizontal, 5)
+                Text("\(gridColumns)")
+                    .monospacedDigit()
+                    .foregroundColor(spaceDisplayMode == .grid ? .primary : .secondary)
+                    .frame(width: 18, alignment: .trailing)
+            }
+            .padding(.leading, subItemIndent)
         }
         .padding()
     }
 
     // MARK: - Switching pane
+    @AppStorage("switchingMode") private var switchingMode = SwitchingMode.smooth.rawValue
+
+    private var isGestureMode: Bool {
+        switchingMode != SwitchingMode.smooth.rawValue
+    }
+
     private var switchingPane: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Switching Spaces")
                 .font(.title2)
                 .fontWeight(.semibold)
-            HStack(alignment: .firstTextBaseline) {
-                Text("Shortcut keys")
-                    .frame(width: 130, alignment: .leading)
-                Picker("Shortcut keys", selection: $keySet) {
-                    Text("number keys on top row").tag(KeySet.toprow).padding(.bottom, 2)
-                    Text("numeric keypad").tag(KeySet.numpad)
-                }
-                .pickerStyle(.radioGroup)
-                .labelsHidden()
+            Picker("", selection: $switchingMode) {
+                Text("Use smooth transitions")
+                    .tag(SwitchingMode.smooth.rawValue)
+                Text("Use fast animations (same display only)")
+                    .tag(SwitchingMode.fast.rawValue)
+                Text("Use instant switching (same display only)")
+                    .tag(SwitchingMode.instant.rawValue)
             }
-            .padding(.bottom, 6)
-            HStack(alignment: .top) {
-                Text("With modifiers")
-                    .frame(width: 130, alignment: .leading)
-                VStack(alignment: .leading) {
-                    Toggle("Shift ⇧", isOn: $withShift)
-                    Toggle("Control ⌃", isOn: $withControl)
-                }
-                Spacer()
-                VStack(alignment: .leading) {
-                    Toggle("Option ⌥", isOn: $withOption)
-                    Toggle("Command ⌘", isOn: $withCommand)
-                }
-                Spacer()
-            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
             .padding(.bottom, 6)
             HStack(spacing: 8) {
                 Button {
                     openMissionControlShortcuts()
                 } label: {
-                    Text("Open \(systemSettingsName()) → Mission Control Shortcuts…")
+                    Text("Open System Settings → Mission Control Shortcuts…")
                 }
                 Button {
                     showSwitchingHelp.toggle()
@@ -433,22 +507,20 @@ struct PreferencesView: View {
                 .buttonStyle(.plain)
                 .popover(isPresented: $showSwitchingHelp, arrowEdge: .trailing) {
                     Text("""
-                        For switching between spaces to work, these settings \
-                        must match the keyboard shortcuts assigned \
-                        for Mission Control.
+                        Spaceman reads the Mission Control keyboard shortcuts directly \
+                        from your system settings. To change them, use this button.
                         """)
                     .padding()
                     .frame(width: 240)
                 }
             }
+            .padding(.bottom, 2)
+            Toggle("Show HUD when switching spaces", isOn: $showHUD)
+            Toggle("Always transparent", isOn: $hudAlwaysTransparent)
+                .padding(.leading, subItemIndent)
+                .disabled(!showHUD)
         }
         .padding()
-        .onChange(of: keySet) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
-        }
-        .onChange(of: [withShift, withControl, withCommand, withOption]) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
-        }
     }
 
     // MARK: - Refresh Shortcut Recorder
@@ -469,43 +541,62 @@ struct PreferencesView: View {
         }
     }
 
-    // MARK: - Layout Size Picker
-    private var layoutSizePicker: some View {
-        HStack(spacing: 12) {
-            Text("Layout")
+    // MARK: - Quick Rename Shortcut Recorder
+    private var quickRenameShortcutRecorder: some View {
+        HStack {
+            Text("Shortcut to rename current space")
             Spacer()
-            Picker("", selection: $layoutMode) {
-                Text("Dual Row").tag(LayoutMode.dualRows)
-                Text("Narrow").tag(LayoutMode.narrow)
-                Text("Compact").tag(LayoutMode.compact)
-                Text("Medium").tag(LayoutMode.medium)
-                Text("Large").tag(LayoutMode.large)
-                Text("Extra Large").tag(LayoutMode.extraLarge)
-                Text("Enormous").tag(LayoutMode.enormous)
-            }
-            .fixedSize()
-        }
-        .onChange(of: layoutMode) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+            KeyboardShortcuts.Recorder(for: .quickRename)
         }
     }
 
-    // MARK: - Dual Row Fill Order Picker
-    private var dualRowFillOrderPicker: some View {
-        HStack(spacing: 12) {
-            Text("Dual Row fill order")
-                .fixedSize()
-                .foregroundColor(layoutMode == .dualRows ? .primary : .secondary)
-                .padding(.leading, 40)
-            Spacer(minLength: 8)
-            Picker("", selection: $dualRowFillOrder) {
-                Text("Rows first").tag(DualRowFillOrder.byRow)
-                Text("Columns first").tag(DualRowFillOrder.byColumn)
+    // MARK: - Icon Size Picker
+    private var iconSizePicker: some View {
+        let availableSizes = rowLayout.isTwoRows
+            ? Array(Constants.sizesTwoRows.keys).sorted { $0.rawValue < $1.rawValue }
+            : Array(IconSize.allCases)
+        return HStack(spacing: 12) {
+            Text("Icon size")
+            Spacer()
+            Picker("", selection: $iconSize) {
+                ForEach(availableSizes, id: \.self) { mode in
+                    Text(mode.menuLabel).tag(mode)
+                }
             }
-            .pickerStyle(.segmented)
             .fixedSize()
         }
-        .disabled(layoutMode != .dualRows)
+        .onChange(of: iconSize) { _ in
+            postSettingsChanged()
+        }
+    }
+
+    // MARK: - Row Layout Picker
+    private var rowLayoutPicker: some View {
+        HStack(spacing: 12) {
+            Text("Rows")
+                .fixedSize()
+            Spacer(minLength: 8)
+            HStack(spacing: 1) {
+                ForEach(RowLayout.allCases, id: \.self) { layout in
+                    let isSelected = rowLayout == layout
+                    Button(layout.pickerLabel) {
+                        rowLayout = layout
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(isSelected ? Color.accentColor : Color.gray.opacity(0.2))
+                    .foregroundColor(isSelected ? .white : .primary)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .onChange(of: rowLayout) { newValue in
+            if newValue.isTwoRows {
+                iconSize = Constants.nearestTwoRowIconSize(for: iconSize)
+            }
+            postSettingsChanged()
+        }
     }
 
     // MARK: - Style Pickers
@@ -513,7 +604,7 @@ struct PreferencesView: View {
         HStack(spacing: 12) {
             Text("Icon text")
             Spacer()
-            Picker("", selection: $displayStyle) {
+            Picker("", selection: $iconText) {
                 Text("No text").tag(IconText.noText)
                 Text("Numbers").tag(IconText.numbers)
                 Text("Names").tag(IconText.names)
@@ -521,8 +612,28 @@ struct PreferencesView: View {
             }
             .fixedSize()
         }
-        .onChange(of: displayStyle) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+        .onChange(of: iconText) { _ in
+            postSettingsChanged()
+        }
+    }
+
+    private var fontDesignPicker: some View {
+        HStack(spacing: 12) {
+            Text("Font")
+                .fixedSize()
+                .foregroundColor(iconText != .noText ? .primary : .secondary)
+                .padding(.leading, subItemIndent)
+            Spacer(minLength: 8)
+            Picker("", selection: $fontDesign) {
+                ForEach(FontDesign.allCases, id: \.self) { design in
+                    Text(design.menuLabel).tag(design)
+                }
+            }
+            .fixedSize()
+        }
+        .disabled(iconText == .noText)
+        .onChange(of: fontDesign) { _ in
+            postSettingsChanged()
         }
     }
 
@@ -539,7 +650,7 @@ struct PreferencesView: View {
             .fixedSize()
         }
         .onChange(of: decorationActive) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+            postSettingsChanged()
         }
     }
 
@@ -555,14 +666,15 @@ struct PreferencesView: View {
             .fixedSize()
         }
         .onChange(of: decorationInactive) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+            postSettingsChanged()
         }
     }
 
     // MARK: - Icon Width Picker
     private var iconWidthPicker: some View {
         HStack(spacing: 12) {
-            Text("Icon widths")
+            Text("Icon width")
+                .padding(.leading, subItemIndent)
             Spacer()
             Picker("", selection: $useVariableWidth) {
                 Text("Roughly equal").tag(false)
@@ -572,21 +684,21 @@ struct PreferencesView: View {
             .fixedSize()
         }
         .onChange(of: useVariableWidth) { _ in
-            NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+            postSettingsChanged()
         }
     }
 
     // MARK: - Space Name List Editor
     private var spaceNameListEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if prefsVM.sortedSpaceNamesDict.count == 0 {
+            if prefsVM.sortedSpaceNamesDict.isEmpty {
                 Text("No spaces detected yet.")
                     .foregroundColor(.secondary)
             } else {
                 // Show a text field per space entry (keyed to avoid index issues during updates)
                 ForEach(prefsVM.sortedSpaceNamesDict, id: \.key) { entry in
                     let info = entry.value
-                    let sbd = info.spaceByDesktopID
+                    let sbd = info.spaceLabel
                     let displayIndex = info.currentDisplayIndex ?? 1
                     let spacePart: String = sbd.hasPrefix("F")
                         ? "Full Screen " + String(Int(sbd.dropFirst()) ?? 0)
@@ -594,7 +706,7 @@ struct PreferencesView: View {
                     let hasMultipleDisplays = NSScreen.screens.count > 1
                     let label = hasMultipleDisplays ? "Display \(displayIndex)  \(spacePart)" : spacePart
                     let leftMargin = 40
-                    let labelWidth = hasMultipleDisplays ? 140 : 80
+                    let labelWidth = hasMultipleDisplays ? 150 : 80
 
                     HStack(spacing: 8) {
                         Text(label)
@@ -610,7 +722,7 @@ struct PreferencesView: View {
                                     prefsVM.updateSpace(for: entry.key, to: trimmed)
                                     prefsVM.persistChanges(for: entry.key)
                                     NotificationCenter.default.post(
-                                        name: NSNotification.Name(rawValue: "ButtonPressed"),
+                                        name: settingsChangedName,
                                         object: nil)
                                 }
                             )
@@ -635,7 +747,7 @@ struct PreferencesView: View {
                                 prefsVM.updateSpaceColor(for: entry.key, to: newColor)
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                     NotificationCenter.default.post(
-                                        name: NSNotification.Name(rawValue: "ButtonPressed"),
+                                        name: settingsChangedName,
                                         object: nil)
                                 }
                             }
@@ -648,7 +760,7 @@ struct PreferencesView: View {
                                 prefsVM.updateSpaceColor(for: entry.key, to: nil)
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                     NotificationCenter.default.post(
-                                        name: NSNotification.Name(rawValue: "ButtonPressed"),
+                                        name: settingsChangedName,
                                         object: nil)
                                 }
                             } label: {
@@ -676,25 +788,29 @@ struct PreferencesView: View {
                     .fixedSize()
                     .layoutPriority(1)
                 Spacer()
-                Picker("", selection: Binding(
-                    get: { visibleSpacesMode },
-                    set: { visibleSpacesModeRaw = $0.rawValue }
-                )) {
-                    Text("All spaces").tag(VisibleSpacesMode.all)
-                    Text("Nearby spaces").tag(VisibleSpacesMode.neighbors)
-                    Text("Current only").tag(VisibleSpacesMode.currentOnly)
+                HStack(spacing: 1) {
+                    ForEach(VisibleSpacesMode.allCases, id: \.self) { mode in
+                        let isSelected = visibleSpacesMode == mode
+                        Button(mode.pickerLabel) {
+                            visibleSpacesMode = mode
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(isSelected ? Color.accentColor : Color.gray.opacity(0.2))
+                        .foregroundColor(isSelected ? .white : .primary)
+                    }
                 }
-                .pickerStyle(.segmented)
-                .fixedSize()
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             Stepper(value: $neighborRadius, in: 1...3) {
                 Text("Nearby range: ±\(neighborRadius)")
                     .foregroundColor(visibleSpacesMode == .neighbors ? .primary : .secondary)
-                    .padding(.leading, 40)
+                    .padding(.leading, subItemIndent)
             }
             .disabled(visibleSpacesMode != .neighbors)
             .onChange(of: neighborRadius) { _ in
-                NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
+                postSettingsChanged()
             }
         }
     }
@@ -749,6 +865,6 @@ func openSettings(candidates: [String]) {
 
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        PreferencesView(parentWindow: nil)
+        PreferencesView(tabState: PreferencesTabState())
     }
 }

@@ -9,8 +9,7 @@ import Foundation
 import SwiftUI
 
 class PreferencesViewModel: ObservableObject {
-    @AppStorage("autoRefreshSpaces") private var autoRefreshSpaces = false
-    private let nameStore = SpaceNameStore.shared
+    let nameStore: SpaceNameStore
     @Published var spaceNamesDict: [String: SpaceNameInfo] = [:]
     @Published var sortedSpaceNamesDict: [Dictionary<String, SpaceNameInfo>.Element] = []
     @Published var backupStatusMessage: String?
@@ -18,37 +17,21 @@ class PreferencesViewModel: ObservableObject {
     @Published var restoreStatusMessage: String?
     @Published var restoreStatusIsError: Bool = false
     @Published var lastBackupDate: Date?
-    var timer: Timer!
 
     private static let settingsDirectory = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".spaceman")
     private static let settingsFile = settingsDirectory.appendingPathComponent("app-defaults.xml")
     private static let bundleIdentifier = Bundle.main.bundleIdentifier ?? "dev.ruittenb.Spaceman"
 
-    init() {
-        timer = Timer()
-        if autoRefreshSpaces { startTimer() }
+    init(nameStore: SpaceNameStore = .shared) {
+        self.nameStore = nameStore
         refreshBackupDate()
     }
 
     func loadData() {
         let allSpaceNames = nameStore.loadAll()
         let filtered = allSpaceNames.filter { AppDelegate.activeSpaceIDs.contains($0.key) }
-
-        // Preserve any local changes (like colors) that might not be in the loaded data yet
-        var merged = filtered
-        for (key, existingInfo) in spaceNamesDict {
-            if let loadedInfo = filtered[key] {
-                // Prefer loaded data but keep local color if it's newer
-                if existingInfo.colorHex != nil && loadedInfo.colorHex == nil {
-                    var updated = loadedInfo
-                    updated.colorHex = existingInfo.colorHex
-                    merged[key] = updated
-                }
-            }
-        }
-
-        spaceNamesDict = merged
+        spaceNamesDict = filtered
         rebuildSortedSpaceNames()
     }
 
@@ -58,39 +41,29 @@ class PreferencesViewModel: ObservableObject {
 
     private func updateSpaceName(for key: String, to newName: String) {
         guard let info = spaceNamesDict[key] else { return }
-        // Update only the name, preserve all other fields
-        var updatedInfo = SpaceNameInfo(
-            spaceNum: info.spaceNum,
-            spaceName: newName,
-            spaceByDesktopID: info.spaceByDesktopID)
-        updatedInfo.displayUUID = info.displayUUID
-        updatedInfo.positionOnDisplay = info.positionOnDisplay
-        updatedInfo.currentDisplayIndex = info.currentDisplayIndex
-        updatedInfo.currentSpaceNumber = info.currentSpaceNumber
-        updatedInfo.colorHex = info.colorHex
-        spaceNamesDict[key] = updatedInfo
+        spaceNamesDict[key] = info.withName(newName)
     }
 
     func updateSpaceColor(for key: String, to color: NSColor?) {
         guard let info = spaceNamesDict[key] else { return }
-        let hexString = color?.toHexString()
-
-        var updatedInfo = SpaceNameInfo(
-            spaceNum: info.spaceNum,
-            spaceName: info.spaceName,
-            spaceByDesktopID: info.spaceByDesktopID)
-        updatedInfo.displayUUID = info.displayUUID
-        updatedInfo.positionOnDisplay = info.positionOnDisplay
-        updatedInfo.currentDisplayIndex = info.currentDisplayIndex
-        updatedInfo.currentSpaceNumber = info.currentSpaceNumber
-        updatedInfo.colorHex = hexString
-        spaceNamesDict[key] = updatedInfo
+        spaceNamesDict[key] = info.withColor(color?.toHexString())
 
         // Save immediately but don't rebuild sorted array (avoids ForEach recreation).
         // Use update() to merge into existing store, preserving disconnected display entries.
         nameStore.update { stored in
             for (key, info) in spaceNamesDict {
                 stored[key] = info
+            }
+        }
+    }
+
+    func removeAllColors() {
+        for key in spaceNamesDict.keys {
+            spaceNamesDict[key]?.colorHex = nil
+        }
+        nameStore.update { stored in
+            for key in stored.keys {
+                stored[key]?.colorHex = nil
             }
         }
     }
@@ -103,20 +76,6 @@ class PreferencesViewModel: ObservableObject {
             }
         }
         rebuildSortedSpaceNames()
-    }
-
-    func startTimer() {
-        timer = Timer.scheduledTimer(
-            timeInterval: 5, target: self,
-            selector: #selector(refreshSpaces), userInfo: nil, repeats: true)
-    }
-
-    func pauseTimer() {
-        timer.invalidate()
-    }
-
-    @objc func refreshSpaces() {
-        NotificationCenter.default.post(name: NSNotification.Name(rawValue: "ButtonPressed"), object: nil)
     }
 
     private func rebuildSortedSpaceNames() {
@@ -137,16 +96,16 @@ class PreferencesViewModel: ObservableObject {
         if sortedSpaceNamesDict.isEmpty {
             sortedSpaceNamesDict.append((
                 key: "0",
-                value: SpaceNameInfo(spaceNum: 0, spaceName: "DISP", spaceByDesktopID: "1")))
+                value: SpaceNameInfo(spaceNum: 0, spaceName: "DISP", spaceLabel: "1")))
         }
     }
 
     // MARK: - Backup / Restore
 
     func backupPreferences() {
-        let fm = FileManager.default
+        let fileManager = FileManager.default
         do {
-            try fm.createDirectory(at: Self.settingsDirectory, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: Self.settingsDirectory, withIntermediateDirectories: true)
             guard let domain = UserDefaults.standard.persistentDomain(forName: Self.bundleIdentifier) else {
                 showBackupStatus(String(localized: "No preferences to backup"), isError: true)
                 return
@@ -177,10 +136,10 @@ class PreferencesViewModel: ObservableObject {
             throw NSError(domain: "Spaceman", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Invalid backup file"])
         }
-        AppDelegate.resetMigratedKeys()
+        LegacyMigrations.resetMigratedKeys()
         UserDefaults.standard.setPersistentDomain(dict, forName: bundleIdentifier)
-        AppDelegate.performLegacyMigrations()
-        NotificationCenter.default.post(name: NSNotification.Name("ButtonPressed"), object: nil)
+        LegacyMigrations.perform()
+        postSettingsChanged()
     }
 
     func restorePreferences() {
