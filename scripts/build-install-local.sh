@@ -10,6 +10,10 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/Applications}"
 APP_PATH="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$PROJECT.app"
 DEST_PATH="$INSTALL_DIR/$PROJECT.app"
 
+# Stable local identity from mactools' scripts/create-signing-identity.sh keeps
+# macOS privacy grants across rebuilds; otherwise sign ad-hoc.
+SIGN_IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | grep -q '"KobeTools Dev"' && echo "KobeTools Dev" || echo -)}"
+
 echo "Building $PROJECT ($CONFIGURATION) without code signing..."
 
 xcodebuild \
@@ -39,8 +43,8 @@ fi
 echo "Installing to $DEST_PATH..."
 ditto "$APP_PATH" "$DEST_PATH"
 
-echo "Ad-hoc signing installed app..."
-codesign --force --deep --sign - "$DEST_PATH"
+echo "Signing installed app ($SIGN_IDENTITY)..."
+codesign --force --deep --sign "$SIGN_IDENTITY" "$DEST_PATH"
 
 echo "Opening installed app..."
 open "$DEST_PATH"
