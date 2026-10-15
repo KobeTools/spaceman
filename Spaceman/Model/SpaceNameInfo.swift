@@ -23,9 +23,14 @@ struct SpaceNameInfo: Hashable, Codable {
     // Custom color tinting (hex string, e.g., "FF5733")
     var colorHex: String?
 
+    /// What an unnamed desktop shows. Saved as its name too, so it must never count as one.
+    static let placeholderName = "---"
+
     /// Whether this entry has user-assigned data worth preserving (custom name or color).
+    /// The "---" placeholder is not: it is what Spaceman shows (and saves) for a space nobody named,
+    /// and treating it as a name let it win position matches and push out the real names (KobeTools fork).
     var hasUserData: Bool {
-        return !spaceName.isEmpty || colorHex != nil
+        return (!spaceName.isEmpty && spaceName != SpaceNameInfo.placeholderName) || colorHex != nil
     }
 
     /// Return a copy with only the space name changed.

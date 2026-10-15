@@ -246,6 +246,12 @@ class SpaceObserver {
         let storedDisplayIDs: Set<String> = Set(storedNames.values.compactMap { $0.displayUUID })
 
         var updatedNames: [String: SpaceNameInfo] = [:]
+        // Stored entries already given to a space in this update, and the IDs of every space on screen: an
+        // entry under another current space's ID belongs to that space, so position matching leaves it alone
+        // (except after wake/reboot, where IDs may have swapped). Without this, one name could land on two
+        // spaces (KobeTools fork).
+        var claimedKeys: Set<String> = []
+        let currentSpaceIDs = Set(spaceNumberMap.keys)
         var activeSpaceID = -1
         var lastSpaceByDesktopNumber = 0
         var lastFullScreenNumber = 0
@@ -305,13 +311,17 @@ class SpaceObserver {
                     spaceLabel = String(lastSpaceByDesktopNumber)
                 }
 
-                let savedInfo = SpaceObserver.resolveSpaceNameInfo(
+                let othersOnScreen = strategy == .positionOnly ? [] : currentSpaceIDs.subtracting([managedSpaceID])
+                let savedEntry = SpaceObserver.resolveSpaceNameEntry(
                     managedSpaceID: managedSpaceID,
                     displayID: displayID,
                     position: positionOnThisDisplay,
                     storedNames: storedNames,
                     strategy: strategy,
-                    connectedDisplayIDs: strategy != .idOnly ? connectedDisplayIDs : nil)
+                    connectedDisplayIDs: strategy != .idOnly ? connectedDisplayIDs : nil,
+                    excluding: claimedKeys.union(othersOnScreen))
+                if let key = savedEntry?.key { claimedKeys.insert(key) }
+                let savedInfo = savedEntry?.info
                 let savedName = savedInfo?.spaceName
                 let fullscreenApp = isFullScreen ? fullscreenAppName(spaceDict) : nil
                 let isAutoFullscreenName = isFullScreen
@@ -419,17 +429,45 @@ class SpaceObserver {
         position: Int,
         connectedDisplayIDs: Set<String>? = nil
     ) -> SpaceNameInfo? {
+        findEntryByPosition(in: storedNames, displayID: displayID, position: position,
+                            connectedDisplayIDs: connectedDisplayIDs)?.info
+    }
+
+    /// The stored entry for a display + position, and its key. Several entries can share a slot (stale
+    /// copies left by ID reassignments): a real name or colour wins over the "---" placeholder, then the
+    /// lowest key, so the pick no longer depends on dictionary order. `excluding` keys are skipped: entries
+    /// already given to another space in this update, so one name can't land on two spaces (KobeTools fork).
+    static func findEntryByPosition(
+        in storedNames: [String: SpaceNameInfo],
+        displayID: String,
+        position: Int,
+        connectedDisplayIDs: Set<String>? = nil,
+        excluding: Set<String> = [],
+        requireUserData: Bool = false
+    ) -> (key: String, info: SpaceNameInfo)? {
+        func best(_ matches: (SpaceNameInfo) -> Bool) -> (key: String, info: SpaceNameInfo)? {
+            storedNames
+                .filter { entry in
+                    !excluding.contains(entry.key)
+                        && (!requireUserData || entry.value.hasUserData)
+                        && matches(entry.value)
+                }
+                .sorted { a, b in
+                    if a.value.hasUserData != b.value.hasUserData { return a.value.hasUserData }
+                    return (Int(a.key) ?? Int.max, a.key) < (Int(b.key) ?? Int.max, b.key)
+                }
+                .first
+                .map { (key: $0.key, info: $0.value) }
+        }
         // First try exact match by displayID + position
-        if let match = storedNames.values.first(where: {
-            $0.displayUUID == displayID && $0.positionOnDisplay == position
-        }) {
+        if let match = best({ $0.displayUUID == displayID && $0.positionOnDisplay == position }) {
             return match
         }
         // If connectedDisplayIDs provided, search entries from disconnected displays by position
         guard let connectedIDs = connectedDisplayIDs else { return nil }
-        return storedNames.values.first { info in
+        return best { info in
             guard let uuid = info.displayUUID else { return false }
-            return !connectedIDs.contains(uuid) && info.positionOnDisplay == position
+            return !connectedIDs.contains(uuid) && info.positionOnDisplay == position && info.hasUserData
         }
     }
 
@@ -446,22 +484,49 @@ class SpaceObserver {
         strategy: SpaceNameMatchingStrategy = .positionOnly,
         connectedDisplayIDs: Set<String>? = nil
     ) -> SpaceNameInfo? {
+        resolveSpaceNameEntry(managedSpaceID: managedSpaceID, displayID: displayID, position: position,
+                              storedNames: storedNames, strategy: strategy,
+                              connectedDisplayIDs: connectedDisplayIDs)?.info
+    }
+
+    /// `resolveSpaceNameInfo` with the key of the entry it used, so the caller can hand each stored entry to
+    /// one space only (`excluding`). With ID matching, an ID-matched entry is never excluded: it is this
+    /// space's own.
+    static func resolveSpaceNameEntry(
+        managedSpaceID: String,
+        displayID: String,
+        position: Int,
+        storedNames: [String: SpaceNameInfo],
+        strategy: SpaceNameMatchingStrategy = .positionOnly,
+        connectedDisplayIDs: Set<String>? = nil,
+        excluding: Set<String> = []
+    ) -> (key: String, info: SpaceNameInfo)? {
         switch strategy {
         case .positionOnly:
-            return findSpaceByPosition(
+            return findEntryByPosition(
                 in: storedNames, displayID: displayID,
                 position: position,
-                connectedDisplayIDs: connectedDisplayIDs)
+                connectedDisplayIDs: connectedDisplayIDs,
+                excluding: excluding)
         case .idWithPositionFallback:
             if let idMatch = storedNames[managedSpaceID] {
-                return idMatch
+                return (key: managedSpaceID, info: idMatch)
             }
-            return findSpaceByPosition(
+            return findEntryByPosition(
                 in: storedNames, displayID: displayID,
                 position: position,
-                connectedDisplayIDs: connectedDisplayIDs)
+                connectedDisplayIDs: connectedDisplayIDs,
+                excluding: excluding)
         case .idOnly:
-            return storedNames[managedSpaceID]
+            if let idMatch = storedNames[managedSpaceID] { return (key: managedSpaceID, info: idMatch) }
+            // A new ID in normal use: macOS replaced the space (it does, e.g. after moving desktops between
+            // displays). Its name is still stored under the old ID at this slot; take it if no space on
+            // screen owns that entry (`excluding`). Only real names: never a placeholder (KobeTools fork).
+            return findEntryByPosition(
+                in: storedNames, displayID: displayID,
+                position: position,
+                excluding: excluding,
+                requireUserData: true)
         }
     }
 
@@ -474,8 +539,11 @@ class SpaceObserver {
     ) -> [String: SpaceNameInfo] {
         // Collect (displayUUID, position) pairs from updated entries so we can
         // detect when a stored entry's data has already migrated to a new key.
+        // Only an entry with a real name or colour counts as the data having moved there: a space that now
+        // shows the "---" placeholder in that slot hasn't received it (KobeTools fork; dropping the stored
+        // name in that case is how named spaces went blank).
         let updatedPositions: Set<String> = Set(updatedNames.values.compactMap { info in
-            guard let uuid = info.displayUUID, let pos = info.positionOnDisplay else { return nil }
+            guard info.hasUserData, let uuid = info.displayUUID, let pos = info.positionOnDisplay else { return nil }
             return "\(uuid):\(pos)"
         })
 

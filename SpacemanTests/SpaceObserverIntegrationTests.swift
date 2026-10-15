@@ -778,4 +778,52 @@ final class SpaceObserverIntegrationTests: XCTestCase {
         XCTAssertEqual(stored["102"]?.currentDisplayIndex, 1)
         XCTAssertEqual(stored["201"]?.currentDisplayIndex, 2)
     }
+
+    // MARK: - KobeTools fork: what scrambled the real names on 2026-10-15
+
+    /// Six named desktops on one display; macOS replaces the last one's space (ID 8 → 251) while running.
+    /// Before the fix 251 showed "---", and the merge then dropped "Oncall" because a placeholder sat in its
+    /// slot. Now the orphaned name follows the new ID, and nothing is named twice.
+    func testReplacedSpaceKeepsItsName_noDuplicates() {
+        let names = ["Main", "BCN", "Europe", "Map", "Side", "Oncall"]
+        nameStore.update { store in
+            for (i, name) in names.enumerated() {
+                store[String(3 + i)] = SpaceNameInfo(
+                    spaceNum: i + 1, spaceName: name, spaceLabel: String(i + 1),
+                    displayUUID: "display-A", positionOnDisplay: i + 1)
+            }
+        }
+        var ids = [3, 4, 5, 6, 7, 8]
+        observer.displaySpacesProvider = {
+            [makeDisplay(id: "display-A", currentSpaceID: 3, spaces: ids.map { (id: $0, isFullScreen: false) })]
+        }
+        runUpdate() // launch (position matching)
+        runUpdate() // normal operation (ID matching)
+        ids = [3, 4, 5, 6, 7, 251]
+        runUpdate()
+        runUpdate()
+
+        XCTAssertEqual(delegate.receivedSpaces.map(\.spaceName), names)
+        let stored = nameStore.loadAll()
+        XCTAssertEqual(stored["251"]?.spaceName, "Oncall")
+        let shown = delegate.receivedSpaces.map(\.spaceName)
+        XCTAssertEqual(Set(shown).count, shown.count, "no name on two spaces")
+    }
+
+    /// A stale "---" copy shares a slot with a real name (left by earlier ID changes): position matching on
+    /// launch used to pick either one, so a named desktop could come up blank.
+    func testLaunch_placeholderCopyNeverBeatsTheRealName() {
+        nameStore.update { store in
+            store["1299"] = SpaceNameInfo(spaceNum: 2, spaceName: "---", spaceLabel: "2",
+                                          displayUUID: "display-A", positionOnDisplay: 2)
+            store["4"] = SpaceNameInfo(spaceNum: 2, spaceName: "BCN", spaceLabel: "2",
+                                       displayUUID: "display-A", positionOnDisplay: 2)
+        }
+        observer.displaySpacesProvider = {
+            [makeDisplay(id: "display-A", currentSpaceID: 3, spaces: [(id: 3, isFullScreen: false),
+                                                                       (id: 900, isFullScreen: false)])]
+        }
+        runUpdate()
+        XCTAssertEqual(delegate.receivedSpaces[1].spaceName, "BCN")
+    }
 }

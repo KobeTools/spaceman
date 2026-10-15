@@ -174,6 +174,7 @@ final class SpaceNameResolutionTests: XCTestCase {
     }
 
     func testIDMatching_UnknownID_ReturnsNil() {
+        // KobeTools fork: an unknown ID only gets nothing when no orphaned name sits at its slot.
         let storedNames: [String: SpaceNameInfo] = [
             "100": SpaceNameInfo(
                 spaceNum: 1,
@@ -187,12 +188,71 @@ final class SpaceNameResolutionTests: XCTestCase {
         let result = SpaceObserver.resolveSpaceNameInfo(
             managedSpaceID: "999",
             displayID: "D1",
-            position: 1,
+            position: 2,
             storedNames: storedNames,
             strategy: .idOnly
         )
 
-        XCTAssertNil(result, "ID matching should return nil for unknown IDs")
+        XCTAssertNil(result, "ID matching should return nil for unknown IDs with nothing at their slot")
+    }
+
+    // MARK: - KobeTools fork: placeholders, orphaned names, one name per space
+
+    private func info(_ name: String, _ pos: Int, display: String = "D1", color: String? = nil) -> SpaceNameInfo {
+        var i = SpaceNameInfo(spaceNum: pos, spaceName: name, spaceLabel: String(pos),
+                              displayUUID: display, positionOnDisplay: pos)
+        i.colorHex = color
+        return i
+    }
+
+    func testPlaceholderIsNotUserData() {
+        XCTAssertFalse(info("---", 1).hasUserData)
+        XCTAssertTrue(info("---", 1, color: "FF0000FF").hasUserData, "a colour is still user data")
+    }
+
+    func testIDOnly_NewID_RecoversOrphanedNameAtItsSlot() {
+        // macOS replaced space 8 ("Oncall", slot 6) with a new space 251 at the same slot.
+        let stored = ["8": info("Oncall", 6), "7": info("Side", 5)]
+        let result = SpaceObserver.resolveSpaceNameEntry(
+            managedSpaceID: "251", displayID: "D1", position: 6, storedNames: stored, strategy: .idOnly,
+            excluding: ["7"])
+        XCTAssertEqual(result?.key, "8")
+        XCTAssertEqual(result?.info.spaceName, "Oncall")
+    }
+
+    func testIDOnly_NewID_NeverTakesAPlaceholderOrAnEntryOnScreen() {
+        let stored = ["8": info("---", 6), "7": info("Side", 6)]
+        let result = SpaceObserver.resolveSpaceNameEntry(
+            managedSpaceID: "251", displayID: "D1", position: 6, storedNames: stored, strategy: .idOnly,
+            excluding: ["7"])
+        XCTAssertNil(result, "the placeholder isn't a name, and 7 belongs to a space on screen")
+    }
+
+    func testPositionMatch_RealNameBeatsPlaceholderInTheSameSlot() {
+        // A stale "---" copy and the real name share D1/pos 2: the pick used to depend on dictionary order.
+        for _ in 0..<20 {
+            let stored = ["1299": info("---", 2), "4": info("BCN", 2, color: "FBF635FF")]
+            let result = SpaceObserver.resolveSpaceNameInfo(
+                managedSpaceID: "999", displayID: "D1", position: 2, storedNames: stored, strategy: .positionOnly)
+            XCTAssertEqual(result?.spaceName, "BCN")
+        }
+    }
+
+    func testPositionMatch_ExcludedEntryIsSkipped() {
+        let stored = ["8": info("Oncall", 5), "7": info("Side", 5)]
+        let result = SpaceObserver.resolveSpaceNameEntry(
+            managedSpaceID: "x", displayID: "D1", position: 5, storedNames: stored, strategy: .positionOnly,
+            excluding: ["7"])
+        XCTAssertEqual(result?.info.spaceName, "Oncall")
+    }
+
+    func testMerge_PlaceholderInTheSlotDoesNotPushOutTheRealName() {
+        // 251 now sits in slot 6 showing "---"; "Oncall" under the old ID 8 must survive the merge.
+        let updated = ["251": info("---", 6)]
+        let stored = ["8": info("Oncall", 6, color: "E94B47FF")]
+        let merged = SpaceObserver.mergeSpaceNames(
+            updatedNames: updated, storedNames: stored, connectedDisplayIDs: ["D1"])
+        XCTAssertEqual(merged["8"]?.spaceName, "Oncall")
     }
 
     // MARK: - Disconnected display fallback
