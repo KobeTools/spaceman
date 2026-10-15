@@ -16,6 +16,8 @@ struct PreferencesView: View {
     var onCheckForUpdates: (() -> Void)?
 
     @AppStorage("iconText") private var iconText = IconText.numbers
+    @AppStorage(IconText.builtInOverrideKey) private var iconTextBuiltIn = IconText.noOverrideRawValue
+    @AppStorage(IconText.externalOverrideKey) private var iconTextExternal = IconText.noOverrideRawValue
     @AppStorage("decorationActive") private var decorationActive = IconStyle.filledRounded
     @AppStorage("decorationInactive") private var decorationInactive = IconStyle.borderedRounded
     @AppStorage("useVariableWidth") private var useVariableWidth = false
@@ -363,6 +365,8 @@ struct PreferencesView: View {
             iconSizePicker
             iconWidthPicker
             spacesStylePicker
+            iconTextOverridePicker(title: "Built-in display", selection: $iconTextBuiltIn)
+            iconTextOverridePicker(title: "External displays", selection: $iconTextExternal)
             fontDesignPicker
             activeIconStylePicker
             inactiveIconStylePicker
@@ -621,6 +625,27 @@ struct PreferencesView: View {
             .fixedSize()
         }
         .onChange(of: iconText) { _ in
+            postSettingsChanged()
+        }
+    }
+
+    /// Picker that lets a display kind (built-in / external) override the general icon text style.
+    private func iconTextOverridePicker(title: LocalizedStringKey, selection: Binding<Int>) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .fixedSize()
+                .padding(.leading, subItemIndent)
+            Spacer(minLength: 8)
+            Picker("", selection: selection) {
+                Text("Same as above").tag(IconText.noOverrideRawValue)
+                Divider()
+                ForEach(IconText.allCases, id: \.self) { text in
+                    Text(text.menuLabel).tag(text.rawValue)
+                }
+            }
+            .fixedSize()
+        }
+        .onChange(of: selection.wrappedValue) { _ in
             postSettingsChanged()
         }
     }

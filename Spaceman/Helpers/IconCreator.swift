@@ -36,7 +36,7 @@ class IconCreator {
     private var cellSize = NSSize(width: 0, height: 0)
     private var gapWidth = CGFloat.zero
     private var displayGapWidth = CGFloat.zero
-    private var minIconWidth = CGFloat.zero
+    private var minIconWidthByDisplay: [String: CGFloat] = [:]
     private let spaceFilter = SpaceFilter()
 
     public var sizes: GuiSize!
@@ -95,35 +95,37 @@ class IconCreator {
             return empty
         }
 
-        // For uniform icon widths: find the widest text and use it as the minimum width for all icons.
+        // For uniform icon widths: find the widest text per display and use it as the minimum width
+        // for all icons on that display (the text style may differ per display).
         // In single-row mode, this only applies to name-based styles (names, numbers+names).
         // In two-row mode, numbers-only also gets equalized — without it, "1" and "10" would have
         // visibly different widths, making the two-row grid look uneven.
-        let showsNames = iconText == .names || iconText == .numbersAndNames
         let maxNameChars = rowLayout.isTwoRows ? 8 : 4
-        let equalizeNumbers = rowLayout.isTwoRows && iconText == .numbers
-        if !useVariableWidth && (showsNames || equalizeNumbers) {
+        minIconWidthByDisplay = [:]
+        if !useVariableWidth {
             let measureAttrs = getStringAttributes(alpha: 1, color: .black)
             let padding = sizes.horizontalPadding * 2
-            minIconWidth = filteredSpaces.filter { !$0.isFullScreen }.reduce(CGFloat.zero) { widest, space in
+            for space in filteredSpaces where !space.isFullScreen {
+                let text = iconText(for: space)
+                let showsNames = text == .names || text == .numbersAndNames
+                let equalizeNumbers = rowLayout.isTwoRows && text == .numbers
+                guard showsNames || equalizeNumbers else { continue }
                 // Build the same text string that createSpaceIcon() will render,
                 // so the width measurement matches the actual content.
-                let text: NSString
+                let string: NSString
                 if equalizeNumbers {
-                    text = NSString(string: space.spaceLabel)
-                } else if iconText == .numbersAndNames {
+                    string = NSString(string: space.spaceLabel)
+                } else if text == .numbersAndNames {
                     let cappedName = String(space.spaceName.prefix(min(maxNameChars, Constants.maxSpaceNameLength)))
-                    text = NSString(string: "\(space.spaceLabel):\(cappedName)")
+                    string = NSString(string: "\(space.spaceLabel):\(cappedName)")
                 } else {
-                    text = NSString(
+                    string = NSString(
                         string: String(space.spaceName.prefix(min(maxNameChars, Constants.maxSpaceNameLength)))
                     )
                 }
-                let textWidth = text.size(withAttributes: measureAttrs).width
-                return max(widest, textWidth + padding)
+                let width = string.size(withAttributes: measureAttrs).width + padding
+                minIconWidthByDisplay[space.displayID] = max(minIconWidthByDisplay[space.displayID] ?? 0, width)
             }
-        } else {
-            minIconWidth = 0
         }
 
         // Pre-scan for mixed color context: when some spaces have custom colors,
@@ -149,6 +151,12 @@ class IconCreator {
         }
     }
 
+    /// The icon text style for a space, honoring the per-display overrides
+    /// (built-in screen vs. external monitors).
+    private func iconText(for space: Space) -> IconText {
+        IconText.resolve(default: iconText, displayID: space.displayID)
+    }
+
     private func filterSpaces(_ spaces: [Space]) -> [Space] {
         var result = spaceFilter.filter(spaces, mode: visibleSpacesMode, neighborRadius: neighborRadius)
         if !showFullscreenSpaces {
@@ -162,7 +170,7 @@ class IconCreator {
     private func createSpaceIcon(space: Space, defaultColor: NSColor?, minWidth: CGFloat = 0) -> NSImage {
         // 1. Determine text content based on display style
         let text: NSString
-        switch iconText {
+        switch iconText(for: space) {
         case .noText:
             text = ""
         case .numbers:
@@ -209,7 +217,7 @@ class IconCreator {
 
         var iconWidth = contentWidth + padding
 
-        if minIconWidth > 0 && !space.spaceID.hasPrefix("nav-") {
+        if let minIconWidth = minIconWidthByDisplay[space.displayID], !space.spaceID.hasPrefix("nav-") {
             iconWidth = max(iconWidth, minIconWidth)
         }
         if minWidth > 0 {

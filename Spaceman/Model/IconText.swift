@@ -23,3 +23,24 @@ enum IconText: Int, CaseIterable {
         }
     }
 }
+
+/// Per-display-kind override of the icon text style.
+/// The built-in screen and external monitors can each use their own style;
+/// a nil override means "use the general icon text setting".
+extension IconText {
+    static let builtInOverrideKey = "iconTextBuiltIn"
+    static let externalOverrideKey = "iconTextExternal"
+
+    /// Raw value stored when no override is set.
+    static let noOverrideRawValue = -1
+
+    /// Resolves the text style for a space on the given display.
+    static func resolve(default defaultText: IconText, displayID: String,
+                        defaults: UserDefaults = .standard) -> IconText {
+        guard !displayID.isEmpty else { return defaultText }
+        let key = DisplayGeometryUtilities.isBuiltIn(displayUUID: displayID)
+            ? builtInOverrideKey : externalOverrideKey
+        guard let raw = defaults.object(forKey: key) as? Int else { return defaultText }
+        return IconText(rawValue: raw) ?? defaultText
+    }
+}

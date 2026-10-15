@@ -238,4 +238,37 @@ final class EnumBehaviorTests: XCTestCase {
                               "\(layout) should have different picker and menu labels")
         }
     }
+
+    // MARK: - IconText.resolve (per-display overrides)
+
+    private func overrideDefaults() -> UserDefaults {
+        let suite = "IconTextResolveTests"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
+    }
+
+    func testIconTextResolve_noOverrideUsesGeneralStyle() {
+        let defaults = overrideDefaults()
+        XCTAssertEqual(IconText.resolve(default: .names, displayID: "00000000-0000-0000-0000-000000000001",
+                                        defaults: defaults), .names)
+    }
+
+    func testIconTextResolve_externalOverrideAppliesToNonBuiltInDisplay() {
+        let defaults = overrideDefaults()
+        defaults.set(IconText.numbers.rawValue, forKey: IconText.externalOverrideKey)
+        defaults.set(IconText.noText.rawValue, forKey: IconText.builtInOverrideKey)
+        // No such display is connected, so it isn't the built-in one.
+        XCTAssertEqual(IconText.resolve(default: .names, displayID: "00000000-0000-0000-0000-000000000001",
+                                        defaults: defaults), .numbers)
+    }
+
+    func testIconTextResolve_emptyDisplayOrUnknownValueFallsBack() {
+        let defaults = overrideDefaults()
+        defaults.set(IconText.numbers.rawValue, forKey: IconText.externalOverrideKey)
+        XCTAssertEqual(IconText.resolve(default: .names, displayID: "", defaults: defaults), .names)
+        defaults.set(99, forKey: IconText.externalOverrideKey)
+        XCTAssertEqual(IconText.resolve(default: .names, displayID: "00000000-0000-0000-0000-000000000001",
+                                        defaults: defaults), .names)
+    }
 }

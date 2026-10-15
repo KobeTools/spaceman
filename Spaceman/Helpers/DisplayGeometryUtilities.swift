@@ -11,6 +11,15 @@ import Foundation
 class DisplayGeometryUtilities {
     static let verticalStackMargin: CGFloat = 20
 
+    /// Whether the display with the given OS display UUID is the Mac's built-in screen.
+    static func isBuiltIn(displayUUID: String) -> Bool {
+        // "Main" is what CGS reports when there is a single display without a UUID.
+        if displayUUID == "Main" { return CGDisplayIsBuiltin(CGMainDisplayID()) != 0 }
+        let uuid = CFUUIDCreateFromString(kCFAllocatorDefault, displayUUID as CFString)
+        let did = CGDisplayGetDisplayIDFromUUID(uuid)
+        return did != 0 && CGDisplayIsBuiltin(did) != 0
+    }
+
     static func getDisplayCenter(display: NSDictionary) -> CGPoint {
         guard let uuidString = display["Display Identifier"] as? String else { return .zero }
         let uuid = CFUUIDCreateFromString(kCFAllocatorDefault, uuidString as CFString)
